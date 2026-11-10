@@ -22,6 +22,13 @@ Sections 1 and 2 ("Generated") are done. The Railway project exists and is runni
   `DATABASE_URL`, `NODE_ENV`, `APP_BASE_URL`, `TOKEN_PRIVATE_KEY` on worker. The secrets
   were generated at setup and exist only in Railway.
 
+Railway holds a deployment for approval when the commit's author is not someone the
+workspace recognises (`NEEDS_APPROVAL`, reason `EXTERNAL_CONTRIBUTOR`). Commits pushed by
+the Cursor agent are held this way. The first deployment was started by `railway config
+apply` and went through; later pushes to the branch wait in **web → Deployments** and
+**worker → Deployments** until someone with access to the project clicks **Approve**. The
+deployment that is already running keeps serving in the meantime.
+
 What is left is for the owner: section 3 (the Slack app and its six variables), section 4
 (first run), and the last item of section 5 after the pull request is merged. Sections 1
 and 2 are kept as the record of how the project is built, should it ever be rebuilt.
