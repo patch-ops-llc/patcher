@@ -1,0 +1,47 @@
+{
+  "name": "patcher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PatchOps operations bot: recommends in Slack, acts only after approval.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start:web": "node dist/web.js",
+    "start:worker": "node dist/worker.js",
+    "migrate": "node dist/migrate.js",
+    "dev:web": "tsx watch --env-file-if-exists=.env src/web.ts",
+    "dev:worker": "tsx watch --env-file-if-exists=.env src/worker.ts",
+    "dev:migrate": "tsx --env-file-if-exists=.env src/migrate.ts",
+    "dev:fake-slack": "tsx --env-file-if-exists=.env scripts/fake-slack.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@slack/web-api": "^8.3.0",
+    "cron-parser": "^5.10.4",
+    "express": "^5.3.0",
+    "helmet": "^8.3.0",
+    "jose": "^6.2.17",
+    "pg": "^8.23.1",
+    "pg-boss": "^12.38.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "eslint": "^10.14.0",
+    "railway": "^3.16.0",
+    "supertest": "^7.3.2",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
+  }
+}

@@ -1,0 +1,56 @@
+# Slack app manifest for the Patcher hub app. Create it in the PatchOps workspace only:
+# https://api.slack.com/apps -> Create New App -> From a manifest.
+#
+# The four URLs below point at the web service's Railway domain. If that address changes
+# (a custom domain, for example), change all four here and in the Slack app.
+# docs/setup-checklist.md has the full steps.
+_metadata:
+  major_version: 2
+  minor_version: 1
+display_information:
+  name: Patcher
+  description: Recommends operations work and acts only after someone approves it.
+  background_color: "#1f2937"
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: false
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: Patcher
+    always_online: true
+  slash_commands:
+    - command: /ops
+      url: https://web-production-944a4680.up.railway.app/slack/commands
+      description: Patcher status and controls
+      usage_hint: status | pending | pause | resume
+      should_escape: false
+oauth_config:
+  redirect_urls:
+    - https://web-production-944a4680.up.railway.app/auth/slack/callback
+  scopes:
+    # Sign in with Slack for the control UI.
+    user:
+      - openid
+      - profile
+      - email
+    # The least the foundation needs. Later phases add their own scopes with their features.
+    bot:
+      # Post and edit recommendations in channels the bot has been invited to.
+      - chat:write
+      # The /ops command.
+      - commands
+      # Channel names for the routing picker in settings.
+      - channels:read
+      - groups:read
+settings:
+  event_subscriptions:
+    request_url: https://web-production-944a4680.up.railway.app/slack/events
+    bot_events:
+      - app_home_opened
+  interactivity:
+    is_enabled: true
+    request_url: https://web-production-944a4680.up.railway.app/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
