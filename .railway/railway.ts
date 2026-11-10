@@ -31,8 +31,8 @@ export default defineRailway(() => {
     deploy: {
       // Versioned SQL migrations, then the queue's schema. Safe to run from both services.
       preDeployCommand: ['npm run migrate'],
-      restartPolicyType: 'ON_FAILURE',
-      restartPolicyMaxRetries: 10,
+      // Restart on failure with 10 retries is Railway's default. Stating a default here
+      // makes every plan report a change, so it is left out.
     },
   } satisfies Parameters<typeof service>[1];
 

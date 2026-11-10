@@ -1,8 +1,9 @@
 # Slack app manifest for the Patcher hub app. Create it in the PatchOps workspace only:
 # https://api.slack.com/apps -> Create New App -> From a manifest.
 #
-# Replace every PATCHER_WEB_URL below with the public address of the web service
-# (no trailing slash) before pasting. docs/setup-checklist.md has the full steps.
+# The four URLs below point at the web service's Railway domain. If that address changes
+# (a custom domain, for example), change all four here and in the Slack app.
+# docs/setup-checklist.md has the full steps.
 _metadata:
   major_version: 2
   minor_version: 1
@@ -20,13 +21,13 @@ features:
     always_online: true
   slash_commands:
     - command: /ops
-      url: PATCHER_WEB_URL/slack/commands
+      url: https://web-production-944a4680.up.railway.app/slack/commands
       description: Patcher status and controls
       usage_hint: status | pending | pause | resume
       should_escape: false
 oauth_config:
   redirect_urls:
-    - PATCHER_WEB_URL/auth/slack/callback
+    - https://web-production-944a4680.up.railway.app/auth/slack/callback
   scopes:
     # Sign in with Slack for the control UI.
     user:
@@ -44,12 +45,12 @@ oauth_config:
       - groups:read
 settings:
   event_subscriptions:
-    request_url: PATCHER_WEB_URL/slack/events
+    request_url: https://web-production-944a4680.up.railway.app/slack/events
     bot_events:
       - app_home_opened
   interactivity:
     is_enabled: true
-    request_url: PATCHER_WEB_URL/slack/interactions
+    request_url: https://web-production-944a4680.up.railway.app/slack/interactions
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false

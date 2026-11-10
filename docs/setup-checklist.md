@@ -9,6 +9,23 @@ Until the Slack variables are set, both services start and stay healthy, and the
 need Slack say "not configured" (`/health`, the sign-in page, and the service logs, which
 list the missing variable names).
 
+## Where things stand
+
+Sections 1 and 2 ("Generated") are done. The Railway project exists and is running:
+
+- Project: <https://railway.com/project/7399369c-82fa-424d-b063-5feebf3460fd>
+- Web address: <https://web-production-944a4680.up.railway.app>
+  (health: <https://web-production-944a4680.up.railway.app/health>)
+- `Postgres`, `web` and `worker` are deployed from the branch
+  `cursor/phase-0-foundation-60d9`; migrations have run.
+- Set: `DATABASE_URL`, `NODE_ENV`, `SESSION_SECRET`, `TOKEN_PUBLIC_KEY` on web;
+  `DATABASE_URL`, `NODE_ENV`, `APP_BASE_URL`, `TOKEN_PRIVATE_KEY` on worker. The secrets
+  were generated at setup and exist only in Railway.
+
+What is left is for the owner: section 3 (the Slack app and its six variables), section 4
+(first run), and the last item of section 5 after the pull request is merged. Sections 1
+and 2 are kept as the record of how the project is built, should it ever be rebuilt.
+
 ## 1. Railway project
 
 One project named **Patcher**, one environment (`production`), three things in it:
@@ -28,7 +45,7 @@ Both services use the same settings apart from the start command:
 | Pre-deploy command | `npm run migrate` |
 | Health check path | `/health` |
 | Health check timeout | 120 seconds |
-| Restart policy | On failure, 10 retries |
+| Restart policy | On failure, 10 retries (Railway's default) |
 | Source | `patch-ops-llc/patcher`, branch `main` once the first pull request is merged |
 
 These settings are written down in [`.railway/railway.ts`](../.railway/railway.ts). To apply
@@ -38,6 +55,7 @@ them from a checkout:
 npm ci
 railway login
 railway link            # choose the Patcher project and the production environment
+export PATCHER_DEPLOY_BRANCH=cursor/phase-0-foundation-60d9   # only until the PR is merged
 railway config plan     # shows what would change; changes nothing
 railway config apply    # applies after you confirm
 ```
@@ -107,8 +125,9 @@ owner the first time they sign in; every other person is added in **Settings →
 
 ## 3. Owner: the Slack app
 
-1. Open [`slack/manifest.yaml`](../slack/manifest.yaml) and replace each `PATCHER_WEB_URL`
-   with the public address of the web service, with no trailing slash.
+1. Open [`slack/manifest.yaml`](../slack/manifest.yaml). Its four URLs already point at
+   `https://web-production-944a4680.up.railway.app`; change them only if the web address
+   has changed.
 2. Go to <https://api.slack.com/apps> → **Create New App** → **From a manifest** → choose the
    **PatchOps** workspace → paste the manifest → **Create**.
 3. Copy the Signing Secret, Client ID and Client Secret from **Basic Information** into the
@@ -126,10 +145,10 @@ The URLs the Slack app must contain (the manifest sets all four):
 
 | Where in the Slack app | URL |
 | --- | --- |
-| OAuth & Permissions → Redirect URLs | `<web address>/auth/slack/callback` |
-| Event Subscriptions → Request URL | `<web address>/slack/events` |
-| Interactivity & Shortcuts → Request URL | `<web address>/slack/interactions` |
-| Slash Commands → `/ops` → Request URL | `<web address>/slack/commands` |
+| OAuth & Permissions → Redirect URLs | `https://web-production-944a4680.up.railway.app/auth/slack/callback` |
+| Event Subscriptions → Request URL | `https://web-production-944a4680.up.railway.app/slack/events` |
+| Interactivity & Shortcuts → Request URL | `https://web-production-944a4680.up.railway.app/slack/interactions` |
+| Slash Commands → `/ops` → Request URL | `https://web-production-944a4680.up.railway.app/slack/commands` |
 
 If the web address changes later (a custom domain, for example), change all four and
 `APP_BASE_URL`.
@@ -153,6 +172,11 @@ If the web address changes later (a custom domain, for example), change all four
 - An external uptime monitor on `https://<web address>/health` (design section 13.1).
 - Railway: restrict who can view the project's variables; turn on two-factor
   authentication for everyone with access.
-- After the first pull request is merged, point both services at `main`
-  (`railway config apply` with no `PATCHER_DEPLOY_BRANCH` set, or **service → Settings →
-  Source**).
+- After the first pull request is merged, point both services at `main`: in each of `web`
+  and `worker`, **Settings → Source → Branch** → `main`. Or, from a checkout of `main`,
+  `railway config apply` with `PATCHER_DEPLOY_BRANCH` unset. Until then both services
+  deploy every push to `cursor/phase-0-foundation-60d9`. If that branch is deleted on
+  merge before the switch, the running services keep running; they just stop getting new
+  deploys until the branch is changed.
+- Railway default: restart on failure, 10 retries. It is in effect and is not written in
+  `.railway/railway.ts`, because stating a default there makes every plan report a change.
