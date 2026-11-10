@@ -26,12 +26,15 @@ export default defineRailway(() => {
   const shared = {
     source: github(REPO, { branch }),
     build: 'npm run build',
-    // Versioned SQL migrations, then the queue's schema. Safe to run from both services.
-    preDeploy: 'npm run migrate',
     healthcheck: '/health',
     healthcheckTimeout: 120,
-    deploy: { restartPolicyType: 'ON_FAILURE', restartPolicyMaxRetries: 10 },
-  } as const;
+    deploy: {
+      // Versioned SQL migrations, then the queue's schema. Safe to run from both services.
+      preDeployCommand: ['npm run migrate'],
+      restartPolicyType: 'ON_FAILURE',
+      restartPolicyMaxRetries: 10,
+    },
+  } satisfies Parameters<typeof service>[1];
 
   const sharedEnv = {
     NODE_ENV: 'production',
