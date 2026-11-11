@@ -1,3 +1,4 @@
+import type { CallTotals } from '../ai/run.js';
 import type { AgentRunRecord } from '../fix/agentFix.js';
 import type { IntegrationStatus } from '../integrations/status.js';
 import { INTEGRATIONS } from '../integrations/status.js';
@@ -8,10 +9,11 @@ import { LINK_KINDS } from '../registry/registry.js';
 import { hasRole } from '../settings/users.js';
 import type { AuditRun } from '../weekly/delivery.js';
 import type { Finding, FindingState } from '../weekly/findings.js';
-import type { AuditReport, FixInfo, ReportFinding } from '../weekly/report.js';
-import { countsLine, coverageLines, fixText, history } from '../weekly/report.js';
+import type { AnalysisStep, AuditReport, FixInfo, ReportFinding, StepStatus } from '../weekly/report.js';
+import { RULES_DETAIL, countsLine, coverageLines, fixText, history } from '../weekly/report.js';
 import type { Severity } from '../weekly/types.js';
 import { CATEGORIES, categories, subject } from '../weekly/types.js';
+import { callsTable } from './aiViews.js';
 import type { SafeHtml } from './html.js';
 import { html } from './html.js';
 import type { PageContext } from './views.js';
@@ -30,6 +32,7 @@ function integrationsCard(integrations: IntegrationStatus[]): SafeHtml {
     railway: 'Reads the workspace for the audit and the inventory. Read-only.',
     github: 'Commits behind the default branch and open critical dependency alerts.',
     cursor: 'Starts an agent on a linked repository after a fix is approved.',
+    anthropic: 'Assesses findings, ranks the weekly report and drafts fix briefs. Without it the rules rank and word the report.',
   };
   return html`<section class="card">
     <h2>Connections</h2>
@@ -76,7 +79,9 @@ const runStatus = (run: AuditRun): SafeHtml =>
     ? html`<span class="bad">Failed</span>`
     : run.status === 'running'
       ? html`Running`
-      : run.postedAt
+      : run.status === 'analyzing'
+        ? html`Waiting for the model`
+        : run.postedAt
         ? html`Posted to Slack`
         : html`<span class="muted">${run.postError ?? 'Waiting to post'}</span>`;
 
@@ -148,6 +153,42 @@ export function auditsPage(
   );
 }
 
+const STEP_LABEL: Record<AnalysisStep['key'], string> = {
+  service: 'Assessment, per service',
+  rollup: 'Ranking and Slack wording',
+  brief: 'Fix briefs',
+};
+const STEP_STATUS: Record<StepStatus, string> = { done: 'Done', partial: 'Partly', skipped: 'Not run', failed: 'Failed' };
+
+function analysisCard(report: AuditReport, calls: CallTotals[]): SafeHtml {
+  const analysis = report.analysis;
+  if (!analysis) return html``;
+  return html`<section class="card" id="analysis">
+    <h2>AI analysis</h2>
+    <p>
+      ${analysis.ranking === 'model'
+        ? 'A model ranked this report and worded its findings, from the evidence the checks collected.'
+        : analysis.reason
+          ? `The rules ranked and worded this report: ${RULES_DETAIL[analysis.reason]}.`
+          : 'The rules ranked this report: there was nothing above informational for a model to rank.'}
+      <span class="muted">Severity and evidence always come from the checks. A model cannot change either, and cannot start anything.</span>
+    </p>
+    <table>
+      <thead><tr><th>Step</th><th>Result</th><th></th></tr></thead>
+      <tbody>
+        ${analysis.steps.map(
+          (s) => html`<tr>
+            <td><strong>${STEP_LABEL[s.key]}</strong></td>
+            <td>${s.status === 'failed' ? html`<span class="bad">${STEP_STATUS[s.status]}</span>` : STEP_STATUS[s.status]}</td>
+            <td class="muted">${s.detail}</td>
+          </tr>`,
+        )}
+      </tbody>
+    </table>
+    ${calls.length ? html`<h3>Model calls</h3>${callsTable(calls)}` : ''}
+  </section>`;
+}
+
 function reportFindingItem(f: ReportFinding): SafeHtml {
   const tail = history(f);
   const fix = fixText(f.fix);
@@ -156,6 +197,7 @@ function reportFindingItem(f: ReportFinding): SafeHtml {
     <div>
       <a href="/audits/findings/${f.id}"><strong>${f.subject}</strong> ${f.title}</a>
       ${tail ? html`<span class="muted">· ${tail}</span>` : ''}
+      ${f.ai ? html`<span class="badge" title="Worded by a model from the evidence the checks collected">AI</span>` : ''}
       <div class="muted small">
         ${f.recommendation}
         ${fix
@@ -168,7 +210,7 @@ function reportFindingItem(f: ReportFinding): SafeHtml {
   </li>`;
 }
 
-export function auditRunPage(ctx: PageContext, data: { run: AuditRun }): string {
+export function auditRunPage(ctx: PageContext, data: { run: AuditRun; calls: CallTotals[] }): string {
   const { run } = data;
   const report: AuditReport | null = run.report;
   const approver = hasRole(ctx.session.user, 'approver');
@@ -190,6 +232,7 @@ export function auditRunPage(ctx: PageContext, data: { run: AuditRun }): string 
 
   const coverage = coverageLines(report.coverage);
   const lines = (items: string[]) => html`<ul class="list">${items.map((l) => html`<li>${l}</li>`)}</ul>`;
+  const unfinished = run.status === 'running' || run.status === 'analyzing';
   return layout(
     ctx,
     'Audit',
@@ -204,15 +247,25 @@ export function auditRunPage(ctx: PageContext, data: { run: AuditRun }): string 
         ${report.counts.muted} muted · ${report.counts.accepted} accepted
       </p>
 
-      <section class="card">
-        <div class="card-head">
-          <h2>Slack</h2>
-          ${!run.postedAt && approver
-            ? html`<form method="post" action="/audits/${run.id}/post">${csrf(ctx)}<button type="submit">Post to Slack now</button></form>`
-            : ''}
-        </div>
-        <p>${run.postedAt ? html`Posted ${when(run.postedAt)}.` : html`<span class="muted">${run.postError ?? 'Waiting to post.'}</span>`}</p>
-      </section>
+      ${unfinished
+        ? html`<div class="flash flash-info">
+            ${run.status === 'analyzing'
+              ? 'The checks are done and the findings below are in the order the rules give them. A model is assessing them; the report is ranked and posted to Slack when it answers, or by the rules if it does not answer in time.'
+              : 'This audit is still finishing. Reload in a minute.'}
+          </div>`
+        : run.status === 'failed'
+          ? html`<div class="flash flash-error">This audit failed after its checks: ${run.error ?? 'unknown error'}</div>`
+          : html`<section class="card">
+              <div class="card-head">
+                <h2>Slack</h2>
+                ${!run.postedAt && approver
+                  ? html`<form method="post" action="/audits/${run.id}/post">${csrf(ctx)}<button type="submit">Post to Slack now</button></form>`
+                  : ''}
+              </div>
+              <p>${run.postedAt ? html`Posted ${when(run.postedAt)}.` : html`<span class="muted">${run.postError ?? 'Waiting to post.'}</span>`}</p>
+            </section>`}
+
+      ${analysisCard(report, data.calls)}
 
       ${report.unread.length
         ? html`<section class="card">
@@ -302,6 +355,19 @@ export function findingPage(
         </ul>
         ${f.cause ? html`<p><strong>Likely cause.</strong> ${f.cause}</p>` : ''}
         <p><strong>Recommended.</strong> ${f.recommendation}</p>
+        ${f.assessment
+          ? html`<p class="muted small">
+                The heading, cause and recommendation were drafted by <code>${f.assessment.model}</code> (prompt
+                audit-service/${f.assessment.promptVersion}) from the evidence above, citing:
+                “${f.assessment.quote}”. The severity and the evidence come from the check.
+              </p>
+              <details>
+                <summary>What the check itself says</summary>
+                <p><strong>${f.rule.title}</strong></p>
+                ${f.rule.cause ? html`<p>Likely cause. ${f.rule.cause}</p>` : ''}
+                <p>Recommended. ${f.rule.recommendation}</p>
+              </details>`
+          : ''}
       </section>
 
       <section class="card">
@@ -323,8 +389,8 @@ export function findingPage(
         ${data.fix.status === 'available'
           ? approver && f.state === 'open'
             ? html`<p class="muted">
-                  Drafts a recommendation and posts it to Slack. An agent starts on <code>${f.repo ?? ''}</code> only
-                  after it is approved, and opens a pull request.
+                  Drafts a recommendation with the brief for the agent and posts it to Slack. An agent starts on
+                  <code>${f.repo ?? ''}</code> only after it is approved, and opens a pull request.
                 </p>
                 <form method="post" action="/audits/findings/${f.id}/fix">${csrf(ctx)}<button class="primary" type="submit">Propose fix via agent</button></form>`
             : html`<p class="muted">An approver can propose a fix while the finding is open.</p>`

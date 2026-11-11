@@ -1,6 +1,9 @@
 import express from 'express';
 import type { NextFunction, Request, Response, Router } from 'express';
+import { PROMPTS } from '../ai/prompts.js';
+import { callTotals, spentSince } from '../ai/run.js';
 import { listAudit, recordAudit } from '../audit/auditLog.js';
+import { listIntegrations } from '../integrations/status.js';
 import { queueStats } from '../queue/queue.js';
 import {
   RecommendationInputError,
@@ -295,13 +298,17 @@ export function uiRouter(deps: WebDeps): Router {
   // Settings -------------------------------------------------------------------------------
 
   router.get('/settings', async (req, res) => {
-    const [ctx, routes, channels, schedules, users, settings] = await Promise.all([
+    const [ctx, routes, channels, schedules, users, settings, integrations, spentDay, spentMonth, calls] = await Promise.all([
       context(req, res),
       listRoutes(deps.pool),
       deps.hubTeamId ? listChannels(deps.pool, deps.hubTeamId) : Promise.resolve([]),
       listSchedules(deps.pool),
       listUsers(deps.pool),
       getAllSettings(deps.pool),
+      listIntegrations(deps.pool),
+      spentSince(deps.pool, 'audit', 24),
+      spentSince(deps.pool, 'audit', 24 * 30),
+      callTotals(deps.pool, { days: 30 }),
     ]);
     res.send(
       settingsPage(ctx, {
@@ -313,6 +320,13 @@ export function uiRouter(deps: WebDeps): Router {
         kinds: deps.catalog.kindNames(),
         dryRunEnv: deps.dryRunEnv,
         slackReady: slackReady(),
+        ai: {
+          configured: integrations.find((i) => i.name === 'anthropic')?.configured ?? null,
+          prompts: PROMPTS,
+          spentDay,
+          spentMonth,
+          calls,
+        },
       }),
     );
   });
@@ -390,6 +404,26 @@ export function uiRouter(deps: WebDeps): Router {
     } catch (err) {
       if (!(err instanceof SettingValidationError)) throw err;
       await back(res, '/settings#switches', 'error', `Not saved. ${err.message}`);
+    }
+  });
+
+  router.post('/settings/ai', owner, async (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    const actor = actorOf(res);
+    try {
+      await setSetting(deps.pool, 'ai.audit.enabled', body['ai.audit.enabled'] === '1', actor);
+      for (const key of ['ai.audit.model_service', 'ai.audit.model_rollup', 'ai.audit.model_brief'] as const) {
+        const raw = text(body[key]);
+        if (raw) await setSetting(deps.pool, key, raw, actor);
+      }
+      for (const key of ['ai.audit.daily_budget_usd', 'ai.audit.monthly_budget_usd', 'ai.audit.log_token_cap', 'ai.audit.wait_minutes'] as const) {
+        const raw = text(body[key]);
+        if (raw) await setSetting(deps.pool, key, Number(raw), actor);
+      }
+      await back(res, '/settings#ai', 'ok', 'Saved.');
+    } catch (err) {
+      if (!(err instanceof SettingValidationError)) throw err;
+      await back(res, '/settings#ai', 'error', `Not saved. ${err.message}`);
     }
   });
 

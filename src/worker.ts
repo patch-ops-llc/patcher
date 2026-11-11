@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { createAnthropicClient } from './ai/client.js';
+import { loadAllPrompts } from './ai/prompts.js';
 import { ConfigError, loadWorkerConfig } from './config.js';
 import { createCursorClient } from './cursor/client.js';
 import { createPool } from './db/pool.js';
@@ -34,14 +36,17 @@ async function main(): Promise<void> {
     }
   }
 
+  // A prompt file missing from the deploy stops the worker here, not at the next audit.
+  loadAllPrompts();
+
   for (const [name, status] of Object.entries(config.features)) {
     if (!status.configured) log.warn('feature not configured', { feature: name, missing: status.missing });
   }
 
   const pool = createPool(config.databaseUrl);
   const queue = await JobQueue.start(config.databaseUrl, 'worker', log);
-  // The clients for Railway, GitHub and Cursor exist only here. The public service never
-  // holds their credentials; it reads what is configured from the `integrations` table.
+  // The clients for Railway, GitHub, Cursor and the model provider exist only here. The public
+  // service never holds their credentials; it reads what is configured from the `integrations` table.
   const integrations: Integrations = {
     railway: config.railwayApiToken
       ? createRailwayClient({ token: config.railwayApiToken, log, ...(config.railwayApiUrl ? { endpoint: config.railwayApiUrl } : {}) })
@@ -56,8 +61,16 @@ async function main(): Promise<void> {
           ...(config.cursorApiUrl ? { baseUrl: config.cursorApiUrl } : {}),
         })
       : null,
+    model: config.anthropicApiKey
+      ? createAnthropicClient({ apiKey: config.anthropicApiKey, baseUrl: config.anthropicApiUrl })
+      : null,
     probe: createProber(),
-    status: { railway: config.features.railway, github: config.features.github, cursor: config.features.cursor },
+    status: {
+      railway: config.features.railway,
+      github: config.features.github,
+      cursor: config.features.cursor,
+      anthropic: config.features.anthropic,
+    },
   };
   await recordConfigured(pool, integrations.status);
 

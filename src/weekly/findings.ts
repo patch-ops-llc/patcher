@@ -3,7 +3,7 @@ import { recordAudit } from '../audit/auditLog.js';
 import type { Pool, Queryable } from '../db/pool.js';
 import { withTx } from '../db/pool.js';
 import type { Evidence } from '../recommendations/types.js';
-import type { ActionType, Category, FindingDraft, FindingScope, Severity } from './types.js';
+import type { ActionType, Assessment, Category, FindingDraft, FindingScope, RuleWording, Severity } from './types.js';
 import { categories } from './types.js';
 
 export const FINDING_STATES = ['open', 'resolved', 'muted', 'accepted'] as const;
@@ -16,10 +16,17 @@ export interface Finding {
   category: Category;
   check: string;
   severity: Severity;
+  /**
+   * The wording in use: the model's, when it assessed the finding in the last run that saw
+   * it, and the rule's otherwise. `rule` always holds the rule's.
+   */
   title: string;
   cause: string;
   recommendation: string;
   actionType: ActionType;
+  rule: RuleWording;
+  /** Set only while it applies, that is, when it was written in the finding's last run. */
+  assessment: Assessment | null;
   evidence: Evidence[];
   repo: string | null;
   branch: string | null;
@@ -77,9 +84,28 @@ interface FindingRow {
   resolved_at: Date | null;
   recommendation_id: string | null;
   pr_url: string | null;
+  assessment: Assessment | null;
 }
 
-const fromRow = (r: FindingRow): Finding => ({
+/** A model can narrow what the rule allows (no fix after all), never widen it. */
+const allowedAction = (rule: ActionType, model: ActionType): ActionType =>
+  model === 'fix_via_agent' && rule !== 'fix_via_agent' ? 'investigate' : model;
+
+function fromRow(r: FindingRow): Finding {
+  const rule: RuleWording = { title: r.title, cause: r.cause, recommendation: r.recommendation, actionType: r.action_type };
+  const assessment = r.assessment && r.assessment.runId === r.last_run ? r.assessment : null;
+  return {
+    ...base(r),
+    title: assessment?.headline || rule.title,
+    cause: assessment ? assessment.cause : rule.cause,
+    recommendation: assessment?.recommendation || rule.recommendation,
+    actionType: assessment ? allowedAction(rule.actionType, assessment.action) : rule.actionType,
+    rule,
+    assessment,
+  };
+}
+
+const base = (r: FindingRow) => ({
   id: r.id,
   fingerprint: r.fingerprint,
   scope: {
@@ -93,10 +119,6 @@ const fromRow = (r: FindingRow): Finding => ({
   category: r.category,
   check: r.check_key,
   severity: r.severity,
-  title: r.title,
-  cause: r.cause,
-  recommendation: r.recommendation,
-  actionType: r.action_type,
   evidence: r.evidence,
   repo: r.repo,
   branch: r.branch,
@@ -235,6 +257,23 @@ export async function getFinding(db: Queryable, id: string): Promise<Finding | n
   if (!UUID.test(id)) return null;
   const { rows } = await db.query<FindingRow>('SELECT * FROM audit_findings WHERE id = $1', [id]);
   return rows[0] ? fromRow(rows[0]) : null;
+}
+
+/** The given findings, whatever their state. Order is not kept. */
+export async function findingsByIds(db: Queryable, ids: string[]): Promise<Finding[]> {
+  if (!ids.length) return [];
+  const { rows } = await db.query<FindingRow>('SELECT * FROM audit_findings WHERE id = ANY($1)', [ids.filter((id) => UUID.test(id))]);
+  return rows.map(fromRow);
+}
+
+/** Stores what the model drafted for a finding, if the run that asked is still the last to have seen it. */
+export async function saveAssessment(db: Queryable, findingId: string, assessment: Assessment): Promise<boolean> {
+  const { rowCount } = await db.query('UPDATE audit_findings SET assessment = $2 WHERE id = $1 AND last_run = $3', [
+    findingId,
+    JSON.stringify(assessment),
+    assessment.runId,
+  ]);
+  return Boolean(rowCount);
 }
 
 export async function listFindings(db: Queryable, states: FindingState[], limit = 500): Promise<Finding[]> {

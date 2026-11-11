@@ -1,26 +1,25 @@
 import { recordAudit, SYSTEM_ACTOR } from '../audit/auditLog.js';
 import type { Actor } from '../audit/auditLog.js';
 import { withTx } from '../db/pool.js';
-import { fixAvailability, proposeFix } from '../fix/agentFix.js';
 import type { GitHubClient } from '../github/client.js';
 import { markError, markOk } from '../integrations/status.js';
+import { getSetting } from '../settings/settings.js';
 import { customCheckResults, probeSummaries } from '../probes/run.js';
 import { collectSnapshot } from '../railway/collect.js';
 import { syncInventory } from '../railway/inventory.js';
 import type { Checked, WorkspaceSnapshot } from '../railway/types.js';
 import { checked, notChecked } from '../railway/types.js';
 import type { WorkerDeps } from '../worker/deps.js';
+import { completeAudit, startAnalysis, tryAuditLock } from './analyze.js';
+import { buildServiceGroups } from './assess.js';
 import type { CheckContext, RepoFacts } from './checks.js';
 import { evaluate, projectScope, serviceScope } from './checks.js';
-import { AUDIT_CARRIER } from './delivery.js';
 import type { TrackedFinding } from './findings.js';
 import { rank, saveFindings } from './findings.js';
-import type { AuditCounts, AuditReport, ReportFinding } from './report.js';
-import { TOP_FINDINGS, toReportFinding, topLine } from './report.js';
+import type { AuditCounts, AuditReport } from './report.js';
+import { RULES_NOTE, toReportFinding } from './report.js';
+import { STALE_RUN_MINUTES, staleAnalysisMinutes } from './request.js';
 
-/** One audit at a time. The id is arbitrary and only has to be stable. */
-const AUDIT_LOCK = 4_170_001;
-const STALE_RUN_MINUTES = 90;
 
 const reasonOf = (err: unknown): string => (err instanceof Error ? err.message : String(err)).slice(0, 200);
 
@@ -93,9 +92,10 @@ export interface AuditOutcome {
 
 /**
  * The weekly audit (design section 7): read the workspace through Railway's API, evaluate the
- * checks, match findings against earlier weeks, propose fixes for the top items and hand the
- * report to Slack. Everything it does at Railway is a read; the only thing it can start is a
- * recommendation, which does nothing until a person approves it.
+ * checks and match findings against earlier weeks. That is the evidence. The model steps in
+ * `analyze.ts` then assess, rank and word it; where they cannot run, the rules' own ranking
+ * and wording go out instead. Everything done at Railway is a read; the only thing the audit
+ * can start is a recommendation, which does nothing until a person approves it.
  */
 export async function runAudit(
   deps: WorkerDeps,
@@ -106,18 +106,25 @@ export async function runAudit(
   const railway = deps.integrations.railway;
   if (!railway) return { runId: null, summary: 'Skipped: Railway is not configured (RAILWAY_API_TOKEN).' };
 
-  const lock = await deps.pool.connect();
+  const unlock = await tryAuditLock(deps.pool);
+  if (!unlock) return { runId: null, summary: 'Skipped: another audit is still running.' };
   let runId: string | null = null;
   try {
-    const got = await lock.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1) AS locked', [AUDIT_LOCK]);
-    if (!got.rows[0]?.locked) return { runId: null, summary: 'Skipped: another audit is still running.' };
-
     // A run that never finished (the worker was restarted mid-audit) would otherwise show as running forever.
     await deps.pool.query(
       `UPDATE audit_runs SET status = 'failed', finished_at = now(), error = 'Interrupted before it finished.'
         WHERE status = 'running' AND started_at < now() - make_interval(mins => $1)`,
       [STALE_RUN_MINUTES],
     );
+    // The same for a run whose analysis never came back and whose poll has stopped.
+    await deps.pool.query(
+      `UPDATE audit_runs SET status = 'failed', finished_at = now(), analysis = NULL, error = 'The analysis never finished.'
+        WHERE status = 'analyzing' AND started_at < now() - make_interval(mins => $1)`,
+      [await staleAnalysisMinutes(deps.pool)],
+    );
+    const waiting = await deps.pool.query(`SELECT 1 FROM audit_runs WHERE status = 'analyzing' LIMIT 1`);
+    if (waiting.rowCount) return { runId: null, summary: 'Skipped: the last audit is still waiting for its analysis.' };
+
     const created = await deps.pool.query<{ id: string }>(
       'INSERT INTO audit_runs (trigger, started_at) VALUES ($1, $2) RETURNING id',
       [trigger, now],
@@ -184,63 +191,46 @@ export async function runAudit(
     });
 
     const open = rank(saved.findings.tracked.filter((f) => f.state === 'open'));
-    const fixes = await fixAvailability(deps.pool, open, deps.integrations.cursor !== null);
-
-    // The top findings go in the Slack message. Those an agent can fix get a recommendation,
-    // carried by the report message, so "Fix" there is the ordinary approval.
-    const top = open.slice(0, TOP_FINDINGS);
-    for (const finding of top) {
-      if (fixes.get(finding.id)?.status !== 'available') continue;
-      try {
-        const { recommendation } = await proposeFix(deps, finding, {
-          carrier: { type: AUDIT_CARRIER, id: runId },
-          dedupeKey: `audit:${runId}:${finding.id}`,
-        });
-        fixes.set(finding.id, { status: 'proposed', recommendationId: recommendation.id });
-      } catch (err) {
-        log.warn('could not propose a fix', { findingId: finding.id, err });
-        fixes.set(finding.id, { status: 'unavailable', reason: 'the fix could not be drafted' });
-      }
-    }
-
-    const reportFindings: ReportFinding[] = open.map((f) => toReportFinding(f, fixes.get(f.id) ?? { status: 'none' }));
     const counts = countFindings(snapshot, open, {
       muted: saved.findings.tracked.filter((f) => f.state === 'muted').length,
       accepted: saved.findings.tracked.filter((f) => f.state === 'accepted').length,
       resolved: saved.findings.resolved,
     });
+    // What the rules established, in the rules' order. It is stored before any model is
+    // asked, so the run's page shows the findings while the analysis is still out.
     const report: AuditReport = {
       version: 1,
       generatedAt: now.toISOString(),
       windowStart: snapshot.windowStart,
       windowDays: snapshot.windowDays,
       counts,
-      findings: reportFindings,
-      top: reportFindings.slice(0, TOP_FINDINGS).map((f) => ({
-        findingId: f.id,
-        line: topLine(f),
-        recommendationId: f.fix.status === 'proposed' ? (f.fix.recommendationId ?? null) : null,
-      })),
+      findings: open.map((f) => toReportFinding(f, { status: 'none' })),
+      top: [],
       inventory: saved.inventory,
       coverage: evaluation.coverage,
       unread,
       integrations: deps.integrations.status,
       railwayRequests: snapshot.requests,
     };
-
-    const finishedRunId = runId;
-    await withTx(deps.pool, async (tx) => {
-      await tx.query(
-        `UPDATE audit_runs SET status = 'done', finished_at = now(), counts = $2, report = $3 WHERE id = $1`,
-        [finishedRunId, JSON.stringify(counts), JSON.stringify(report)],
-      );
-      await recordAudit(tx, { actor: SYSTEM_ACTOR, action: 'audit.finish', target: finishedRunId, after: { ...counts } });
-      await deps.queue.enqueue('audit.report.post', { runId: finishedRunId }, { tx });
-    });
-    return {
+    await deps.pool.query(`UPDATE audit_runs SET counts = $2, report = $3 WHERE id = $1`, [
       runId,
-      summary: `${counts.critical} critical, ${counts.warning} warnings, ${counts.healthy} of ${counts.services} services healthy`,
-    };
+      JSON.stringify(counts),
+      JSON.stringify(report),
+    ]);
+
+    const tally = `${counts.critical} critical, ${counts.warning} warnings, ${counts.healthy} of ${counts.services} services healthy`;
+    const groups = buildServiceGroups({
+      snapshot,
+      probes: context.probes,
+      findings: open,
+      logTokenCap: await getSetting(deps.pool, 'ai.audit.log_token_cap'),
+    });
+    const started = await startAnalysis(deps, runId, groups);
+    if (started.waiting) {
+      return { runId, summary: `${tally}; the report follows when the model's analysis is back` };
+    }
+    const { analysis } = await completeAudit(deps, runId, started.step);
+    return { runId, summary: analysis.reason ? `${tally}; ${RULES_NOTE[analysis.reason]}` : tally };
   } catch (err) {
     if (runId) {
       await deps.pool
@@ -252,7 +242,6 @@ export async function runAudit(
     }
     throw err;
   } finally {
-    await lock.query('SELECT pg_advisory_unlock($1)', [AUDIT_LOCK]).catch(() => undefined);
-    lock.release();
+    await unlock();
   }
 }

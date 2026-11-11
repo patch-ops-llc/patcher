@@ -46,10 +46,13 @@ const workerSchema = baseSchema.extend({
   GITHUB_APP_ID: optional(z.string().regex(/^[A-Za-z0-9]+$/)),
   GITHUB_APP_PRIVATE_KEY: optional(z.string().min(100)),
   GITHUB_APP_INSTALLATION_ID: optional(z.string().regex(/^\d+$/)),
+  // The model steps of the audit. Without it the audit ranks by its rules and says so.
+  ANTHROPIC_API_KEY: optional(z.string().min(20)),
   // Development and test only: point the clients at local fakes.
   RAILWAY_API_URL: optional(z.string().url()),
   CURSOR_API_URL: optional(z.string().url()),
   GITHUB_API_URL: optional(z.string().url()),
+  ANTHROPIC_API_URL: optional(z.string().url()),
 });
 
 export class ConfigError extends Error {}
@@ -135,8 +138,11 @@ export function loadWebConfig(env: NodeJS.ProcessEnv = process.env) {
 
 export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = parse(workerSchema, env);
-  if (parsed.NODE_ENV === 'production' && (parsed.RAILWAY_API_URL || parsed.CURSOR_API_URL || parsed.GITHUB_API_URL)) {
-    throw new ConfigError('RAILWAY_API_URL, CURSOR_API_URL and GITHUB_API_URL must not be set in production');
+  if (
+    parsed.NODE_ENV === 'production' &&
+    (parsed.RAILWAY_API_URL || parsed.CURSOR_API_URL || parsed.GITHUB_API_URL || parsed.ANTHROPIC_API_URL)
+  ) {
+    throw new ConfigError('RAILWAY_API_URL, CURSOR_API_URL, GITHUB_API_URL and ANTHROPIC_API_URL must not be set in production');
   }
   const base = common(parsed);
   const githubVars = {
@@ -161,6 +167,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
           }
         : undefined,
     githubApiUrl: parsed.GITHUB_API_URL,
+    anthropicApiKey: parsed.ANTHROPIC_API_KEY,
+    anthropicApiUrl: parsed.ANTHROPIC_API_URL,
     features: {
       /** Posting, editing messages, the channel list and the App Home tab. */
       slackApi: feature({
@@ -174,6 +182,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
       github: feature(githubVars),
       /** "Fix via agent": starting a Cursor agent on a linked repository after approval. */
       cursor: feature({ CURSOR_API_KEY: parsed.CURSOR_API_KEY }),
+      /** Every model call: the audit's analysis, its ranking and the fix briefs. */
+      anthropic: feature({ ANTHROPIC_API_KEY: parsed.ANTHROPIC_API_KEY }),
     },
   };
 }

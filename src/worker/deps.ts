@@ -3,6 +3,7 @@ import type { Logger } from '../log.js';
 import type { Enqueuer } from '../queue/queue.js';
 import type { Carriers } from '../recommendations/carriers.js';
 import type { Catalog } from '../recommendations/catalog.js';
+import type { ModelClient } from '../ai/client.js';
 import type { FeatureStatus } from '../config.js';
 import type { CursorClient } from '../cursor/client.js';
 import type { GitHubClient } from '../github/client.js';
@@ -18,8 +19,10 @@ export interface Integrations {
   railway: RailwayReader | null;
   github: GitHubClient | null;
   cursor: CursorClient | null;
+  /** The model provider. It drafts and classifies; it is given no other client and no credential. */
+  model: ModelClient | null;
   probe: Prober;
-  status: { railway: FeatureStatus; github: FeatureStatus; cursor: FeatureStatus };
+  status: { railway: FeatureStatus; github: FeatureStatus; cursor: FeatureStatus; anthropic: FeatureStatus };
 }
 
 /** What every job handler in the worker is given. */

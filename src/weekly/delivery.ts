@@ -14,7 +14,7 @@ import { ACTION_IDS, MAX_BUTTONS, MAX_LINES, clip, encodeRef, escapeMrkdwn } fro
 import type { WorkerDeps } from '../worker/deps.js';
 import { notifyOps } from '../worker/notify.js';
 import type { AuditCounts, AuditReport, TopItem } from './report.js';
-import { TOP_FINDINGS, countsLine, titleLine } from './report.js';
+import { TOP_FINDINGS, countsLine, rulesNote, titleLine } from './report.js';
 
 export const AUDIT_CARRIER = 'audit_run';
 const MAX_LINE_LENGTH = 160;
@@ -22,7 +22,7 @@ const MAX_LINE_LENGTH = 160;
 export interface AuditRun {
   id: string;
   trigger: string;
-  status: 'running' | 'done' | 'failed';
+  status: 'running' | 'analyzing' | 'done' | 'failed';
   startedAt: Date;
   finishedAt: Date | null;
   counts: AuditCounts | null;
@@ -129,13 +129,13 @@ function fixState(rec: Recommendation, agent: AgentRunRecord | undefined): strin
  * finding. The last button opens the full report. Five lines and four buttons at most.
  */
 export function auditReportMessage(
-  input: { runId: string; counts: AuditCounts; top: TopItem[] },
+  input: { runId: string; counts: AuditCounts; top: TopItem[]; note?: string | null },
   recommendations: Recommendation[],
   agents: AgentRunRecord[],
   appBaseUrl: string,
 ): SlackMessage {
   const top = input.top.slice(0, TOP_FINDINGS);
-  const lines = [`*${escapeMrkdwn(titleLine(input.counts))}*`, escapeMrkdwn(countsLine(input.counts))];
+  const lines = [`*${escapeMrkdwn(titleLine(input.counts))}*`, escapeMrkdwn(countsLine(input.counts, input.note))];
   const buttons: SlackBlock[] = [];
   if (!top.length) lines.push('No open findings.');
 
@@ -246,7 +246,7 @@ export async function postAuditReport(deps: WorkerDeps, runId: string): Promise<
     try {
       ({ ts } = await deps.slack.postMessage({
         channel: route.channelId,
-        ...auditReportMessage({ runId, counts: row.counts, top: row.report.top }, fixes, [], deps.appBaseUrl),
+        ...auditReportMessage({ runId, counts: row.counts, top: row.report.top, note: rulesNote(row.report) }, fixes, [], deps.appBaseUrl),
       }));
     } catch (err) {
       if (err instanceof SlackApiError && !err.retryable) {
@@ -293,7 +293,7 @@ export async function renderAuditReport(deps: WorkerDeps, runId: string): Promis
   await deps.slack.updateMessage({
     channel: run.slackChannel,
     ts: run.slackTs,
-    ...auditReportMessage({ runId, counts: run.counts, top: run.report.top }, fixes, agents, deps.appBaseUrl),
+    ...auditReportMessage({ runId, counts: run.counts, top: run.report.top, note: rulesNote(run.report) }, fixes, agents, deps.appBaseUrl),
   });
 }
 

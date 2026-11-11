@@ -42,6 +42,14 @@ describe('settings', () => {
       'approvals.reminder_hours': 24,
       'slack.max_posts_per_hour': 6,
       'audit.agent_timeout_minutes': 180,
+      'ai.audit.enabled': true,
+      'ai.audit.model_service': 'claude-sonnet-5-5',
+      'ai.audit.model_rollup': 'claude-sonnet-5-5',
+      'ai.audit.model_brief': 'claude-sonnet-5-5',
+      'ai.audit.daily_budget_usd': 0,
+      'ai.audit.monthly_budget_usd': 0,
+      'ai.audit.log_token_cap': 4000,
+      'ai.audit.wait_minutes': 120,
     });
   });
 

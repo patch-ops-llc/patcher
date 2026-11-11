@@ -3,6 +3,12 @@ import type { Actor } from '../audit/auditLog.js';
 import { recordAudit } from '../audit/auditLog.js';
 import type { Pool, Queryable } from '../db/pool.js';
 import { withTx } from '../db/pool.js';
+import { TIER_MODELS } from '../ai/models.js';
+
+const modelId = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9][a-z0-9.-]{2,80}$/, 'A model id looks like claude-sonnet-5-5.');
 
 /**
  * Every setting the worker reads at run time. A later phase adds a key here with its schema
@@ -30,6 +36,34 @@ export const settingDefs = {
     schema: z.number().int().min(10).max(24 * 60),
     default: 180,
     label: 'Minutes to wait for a fix agent before giving up on it',
+  },
+  'ai.audit.enabled': {
+    schema: z.boolean(),
+    default: true,
+    label: 'Use the model in the weekly audit (off: the rules rank and word the report)',
+  },
+  'ai.audit.model_service': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that assesses each service' },
+  'ai.audit.model_rollup': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that ranks the report' },
+  'ai.audit.model_brief': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that drafts a fix brief' },
+  'ai.audit.daily_budget_usd': {
+    schema: z.number().min(0).max(10_000),
+    default: 0,
+    label: 'Most to spend on audit model calls in 24 hours, in US dollars (0: no cap)',
+  },
+  'ai.audit.monthly_budget_usd': {
+    schema: z.number().min(0).max(100_000),
+    default: 0,
+    label: 'Most to spend on audit model calls in 30 days, in US dollars (0: no cap)',
+  },
+  'ai.audit.log_token_cap': {
+    schema: z.number().int().min(200).max(50_000),
+    default: 4000,
+    label: 'Most log tokens sent to the model for one service',
+  },
+  'ai.audit.wait_minutes': {
+    schema: z.number().int().min(5).max(24 * 60),
+    default: 120,
+    label: 'Minutes to wait for the model before the report goes out ranked by the rules',
   },
 } as const;
 

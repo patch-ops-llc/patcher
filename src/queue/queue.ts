@@ -52,6 +52,9 @@ const RETRY_POLICY = {
  */
 const QUEUE_OVERRIDES: Partial<Record<JobName, { retryLimit?: number; expireInSeconds?: number }>> = {
   'audit.run': { retryLimit: 0, expireInSeconds: 3600 },
+  // One poll can end in the ranking call and up to three briefs, each of which may think for a while.
+  'audit.analyze': { expireInSeconds: 1800 },
+  'audit.fix.propose': { expireInSeconds: 900 },
 };
 
 function errorText(output: unknown): string {

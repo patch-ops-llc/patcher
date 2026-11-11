@@ -29,6 +29,10 @@ export const jobSchemas = {
   }),
   /** Run the weekly audit. Its own queue, because it runs for minutes and must not be retried blindly. */
   'audit.run': z.strictObject({ trigger: z.enum(['schedule', 'manual']), requestedBy: z.string() }),
+  /** Ask the model provider whether an audit's batch of per-service analyses has ended, and finish the audit when it has. */
+  'audit.analyze': z.strictObject({ runId: id }),
+  /** Draft a fix for one finding, asked for from its page: the brief, then the recommendation. */
+  'audit.fix.propose': z.strictObject({ findingId: id, requestedBy: z.string() }),
   /** Post a finished audit's report to the channel routed for audits. */
   'audit.report.post': z.strictObject({ runId: id }),
   /** Ask Cursor how an agent started by an approved fix is doing. */

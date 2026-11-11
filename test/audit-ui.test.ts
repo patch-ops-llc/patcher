@@ -9,6 +9,7 @@ import { getRecommendation, listRecommendations } from '../src/recommendations/s
 import { RegistryError, addCheck, addLink, createProject, getProject, importRailwayProjects, linkedRepos, listProjects, normalizeRepo, projectForRepo } from '../src/registry/registry.js';
 import { setSetting } from '../src/settings/settings.js';
 import { signSlackRequest } from '../src/slack/verify.js';
+import { proposeFixFor } from '../src/weekly/analyze.js';
 import { getAuditRun, postAuditReport } from '../src/weekly/delivery.js';
 import { getFinding } from '../src/weekly/findings.js';
 import { runAudit } from '../src/weekly/run.js';
@@ -237,15 +238,22 @@ describe('Audits in the control UI', () => {
     expect((await approver.submit(`/audits/findings/${id}/fix`)).page).toContain('A fix cannot be proposed: Cursor is not configured (CURSOR_API_KEY).');
 
     await recordConfigured(pool, testIntegrations({ railway: crashingRailway(), cursor }).status);
-    const { location } = await approver.submit(`/audits/findings/${id}/fix`);
-    const recId = location.split('/').pop()!;
+    // The public service only asks. The worker drafts the brief and the recommendation.
+    h.queue.clear();
+    expect((await approver.submit(`/audits/findings/${id}/fix`)).page).toContain('The fix is being drafted.');
+    expect(h.queue.of('audit.fix.propose')).toEqual([{ findingId: id, requestedBy: APPROVER }]);
+    expect((await pool.query('SELECT 1 FROM recommendations')).rowCount).toBe(0);
+    const w = harness(pool, { integrations: testIntegrations({ railway: crashingRailway(), cursor }) });
+    const recId = (await proposeFixFor(w.worker, id, APPROVER))!.id;
     expect(await getRecommendation(pool, recId)).toMatchObject({ kind: 'audit_fix', status: 'drafted', carrierType: null });
     expect((await listAudit(pool, 50)).find((e) => e.action === 'recommendation.create')).toMatchObject({ actor: APPROVER, target: recId });
-    expect(h.queue.of('recommendation.post')).toEqual([{ recommendationId: recId }]);
-    expect(await postRecommendation(h.worker, recId)).toBe('posted');
-    const message = h.slack.of('postMessage').at(-1)!;
+    expect(w.queue.of('recommendation.post')).toEqual([{ recommendationId: recId }]);
+    expect(await postRecommendation(w.worker, recId)).toBe('posted');
+    const message = w.slack.of('postMessage').at(-1)!;
     expect(message.channel).toBe(CHANNEL);
     expect(message.text).toContain('Fix Acme Portal api: crashed 4 times in the last 7 days');
+    // Asked twice (a double click, or a retried job), it is still one recommendation.
+    expect((await proposeFixFor(w.worker, id, APPROVER))).toBeNull();
 
     // One open proposal per finding.
     expect((await approver.submit(`/audits/findings/${id}/fix`)).page).toContain('A fix cannot be proposed');
@@ -269,6 +277,7 @@ describe('Audits in the control UI', () => {
       railway: { configured: true, lastOkAt: null },
       github: { configured: false, lastOkAt: null },
       cursor: { configured: true, lastOkAt: null },
+      anthropic: { configured: false, lastOkAt: null },
     });
   });
 });
@@ -307,7 +316,7 @@ describe('the project registry', () => {
     await expect(addLink(pool, globex, 'railway_project', 'p-globex', OWNER)).rejects.toThrow('A Railway project is linked by its id.');
     await expect(createProject(pool, { name: 'acme portal' }, OWNER)).rejects.toThrow('A project with that name already exists.');
 
-    expect(await projectForRepo(pool, 'Example-Org/Acme-Portal')).toEqual({ id: acme, name: 'Acme Portal' });
+    expect(await projectForRepo(pool, 'Example-Org/Acme-Portal')).toEqual({ id: acme, name: 'Acme Portal', description: '' });
     expect(await linkedRepos(pool)).toEqual(new Set([ACME_REPO]));
     await pool.query(`UPDATE projects SET status = 'paused' WHERE id = $1`, [acme]);
     expect(await projectForRepo(pool, ACME_REPO)).toBeNull();

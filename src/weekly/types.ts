@@ -49,6 +49,33 @@ export interface FindingDraft {
 }
 
 /**
+ * What the model drafted for a finding in one run (design 7.3, step 1). It words and
+ * classifies; the severity, the evidence and the fingerprint stay the rule's. It counts only
+ * for the run it was written in: a later run that re-evaluates the finding starts from the
+ * rule's wording again.
+ */
+export interface Assessment {
+  runId: string;
+  /** Reads after the subject, like a rule's title. */
+  headline: string;
+  cause: string;
+  recommendation: string;
+  action: ActionType;
+  /** The evidence line of the finding that the assessment rests on. */
+  quote: string;
+  model: string;
+  promptVersion: string;
+}
+
+/** A finding's wording and recommended action as the rule wrote them. */
+export interface RuleWording {
+  title: string;
+  cause: string;
+  recommendation: string;
+  actionType: ActionType;
+}
+
+/**
  * The stable identity of a finding: where it is, which category, and a signature the check
  * chooses that does not change from week to week (never a count or a date).
  */

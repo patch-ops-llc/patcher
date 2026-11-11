@@ -454,6 +454,16 @@ button.link {
   color: var(--err-ink);
 }
 
+.flash-info {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+details > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
 .banner {
   border-radius: 0;
   margin: 0;

@@ -18,10 +18,12 @@ import { getSetting } from '../settings/settings.js';
 import { SlackApiError } from '../slack/client.js';
 import { clip, escapeMrkdwn } from '../slack/messages.js';
 import type { Finding } from '../weekly/findings.js';
-import { redact } from '../weekly/redact.js';
+import { redact } from '../security/redact.js';
 import type { FixInfo } from '../weekly/report.js';
 import { subject } from '../weekly/types.js';
 import type { WorkerDeps } from '../worker/deps.js';
+import type { DraftedBrief } from './brief.js';
+import { ruleBrief } from './brief.js';
 
 export const FIX_KIND = 'audit_fix';
 export const FIX_ACTION = 'cursor.launch_agent';
@@ -113,34 +115,13 @@ export function registerFixCatalog(catalog: Catalog, runtime: FixRuntime | null)
   });
 }
 
-/** The brief an agent gets for a finding: what was seen, the evidence, and the limits. */
-export function fixBrief(finding: Finding): string {
-  const where = subject(finding.scope);
-  const lines = [
-    `Patcher's weekly Railway audit found a problem in a service that deploys from this repository. Find the cause and fix it.`,
-    '',
-    `Service: ${where}${finding.branch ? ` (deploys from branch ${finding.branch})` : ''}`,
-    `Finding: ${where} ${finding.title}`,
-    ...(finding.cause ? [`Likely cause: ${finding.cause}`] : []),
-    `Suggested direction: ${finding.recommendation}`,
-    '',
-    'Evidence (log lines are reduced to their pattern; values were removed):',
-    ...finding.evidence.slice(0, 6).map((e) => `- ${e.quote} (${e.source})`),
-    '',
-    'Rules:',
-    '- Make the smallest change that fixes the cause, with a test where the repository has tests.',
-    '- Open a pull request that explains the cause and the fix. Do not merge it.',
-    '- Do not change secrets, environment variable values or anything in Railway.',
-    '- If the cause is not in this repository, say so in the pull request or in your reply instead of guessing.',
-  ];
-  return redact(lines.join('\n')).slice(0, 6000);
-}
-
 export interface ProposeOptions {
   carrier?: { type: string; id: string };
   createdBy?: Actor;
   /** Makes a second proposal for the same finding and occasion a no-op. */
   dedupeKey: string;
+  /** The brief the model drafted. Without one, the rule's brief is used. */
+  brief?: Pick<DraftedBrief, 'prompt' | 'summary'> | undefined;
 }
 
 /**
@@ -158,13 +139,13 @@ export async function proposeFix(
     sourceType: 'audit_finding',
     sourceId: finding.id,
     title: clip(`Fix ${subject(finding.scope)}: ${finding.title}`, 150),
-    body: clip(finding.recommendation, 300),
+    body: clip(options.brief?.summary || finding.recommendation, 300),
     evidence: finding.evidence.length
       ? finding.evidence.slice(0, 10).map((e) => ({ ...e, quote: clip(e.quote, 1500), source: clip(e.source, 280) }))
       : [{ quote: `${subject(finding.scope)} ${finding.title}`, source: 'Patcher weekly audit' }],
     action: {
       type: FIX_ACTION,
-      params: { findingId: finding.id, repo: finding.repo.toLowerCase(), ref: finding.branch, prompt: fixBrief(finding) },
+      params: { findingId: finding.id, repo: finding.repo.toLowerCase(), ref: finding.branch, prompt: options.brief?.prompt ?? ruleBrief(finding) },
     },
     risk: 'medium',
     dedupeKey: options.dedupeKey,

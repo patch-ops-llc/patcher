@@ -1,8 +1,9 @@
 import type { Request, RequestHandler, Response, Router } from 'express';
-import { fixAvailability, listAgentRuns, proposeFix } from '../fix/agentFix.js';
+import { callTotals } from '../ai/run.js';
+import { fixAvailability, listAgentRuns } from '../fix/agentFix.js';
 import { isConfigured, listIntegrations } from '../integrations/status.js';
 import { lastInventorySync, listRailwayProjects } from '../railway/inventory.js';
-import { RecommendationInputError, getRecommendation } from '../recommendations/service.js';
+import { getRecommendation } from '../recommendations/service.js';
 import type { LinkKind } from '../registry/registry.js';
 import {
   LINK_KINDS,
@@ -122,17 +123,9 @@ export function auditRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       await ui.back(res, to, 'error', `A fix cannot be proposed${fix?.reason ? `: ${fix.reason}` : ' for this finding right now'}.`);
       return;
     }
-    try {
-      // The key carries the last audit that saw the finding: one proposal per finding per audit.
-      const { recommendation } = await proposeFix(deps, finding, {
-        createdBy: ui.actorOf(res),
-        dedupeKey: `finding:${finding.id}:${finding.lastRun ?? 'none'}`,
-      });
-      await ui.back(res, `/approvals/${recommendation.id}`, 'ok', 'Fix drafted. It is posted to Slack for approval within a few seconds.');
-    } catch (err) {
-      if (!(err instanceof RecommendationInputError)) throw err;
-      await ui.back(res, to, 'error', err.message);
-    }
+    // The worker drafts it: the brief is written by the model, whose key only the worker holds.
+    await deps.queue.enqueue('audit.fix.propose', { findingId: finding.id, requestedBy: ui.actorOf(res) });
+    await ui.back(res, to, 'ok', 'The fix is being drafted. It is posted to Slack for approval within a minute or two, and linked here.');
   });
 
   router.get('/audits/:id', async (req, res) => {
@@ -141,7 +134,7 @@ export function auditRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       res.status(404).send(errorPage(404, 'That audit does not exist.'));
       return;
     }
-    res.send(auditRunPage(await ui.context(req, res), { run }));
+    res.send(auditRunPage(await ui.context(req, res), { run, calls: await callTotals(deps.pool, { runId: run.id }) }));
   });
 
   router.post('/audits/:id/post', ui.approver, async (req, res) => {

@@ -10,6 +10,7 @@ import { isPaused } from '../settings/settings.js';
 import { getUser } from '../settings/users.js';
 import { SlackApiError } from '../slack/client.js';
 import { clip, homeView } from '../slack/messages.js';
+import { pollAnalysis, proposeFixFor } from '../weekly/analyze.js';
 import { postAuditReport, resumeHeldReports } from '../weekly/delivery.js';
 import { runAudit } from '../weekly/run.js';
 import type { WorkerDeps } from './deps.js';
@@ -161,6 +162,14 @@ export async function registerHandlers(queue: JobQueue, deps: WorkerDeps): Promi
       await record(false, err instanceof Error ? err.message : String(err));
       throw err;
     }
+  });
+  await queue.work('audit.analyze', async (data) => {
+    const outcome = await pollAnalysis(deps, data.runId);
+    deps.log[outcome === 'done' ? 'info' : 'debug']('audit analysis', { runId: data.runId, outcome });
+  });
+  await queue.work('audit.fix.propose', async (data) => {
+    const recommendation = await proposeFixFor(deps, data.findingId, data.requestedBy);
+    deps.log.info('fix proposal', { findingId: data.findingId, recommendationId: recommendation?.id ?? null });
   });
   await queue.work('audit.report.post', async (data) => {
     const outcome = await postAuditReport(deps, data.runId);

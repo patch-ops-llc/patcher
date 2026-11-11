@@ -6,6 +6,7 @@ export const INTEGRATIONS = {
   railway: 'Railway',
   github: 'GitHub',
   cursor: 'Cursor',
+  anthropic: 'Anthropic',
 } as const;
 export type IntegrationName = keyof typeof INTEGRATIONS;
 

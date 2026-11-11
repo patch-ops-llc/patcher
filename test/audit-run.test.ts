@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { agentIdFor, fixBrief, pollAgentRun } from '../src/fix/agentFix.js';
+import { agentIdFor, pollAgentRun } from '../src/fix/agentFix.js';
+import { ruleBrief } from '../src/fix/brief.js';
 import { listIntegrations, recordConfigured } from '../src/integrations/status.js';
 import type { ReadQueryName } from '../src/railway/queries.js';
 import { postRecommendation, syncMessage } from '../src/recommendations/delivery.js';
@@ -117,7 +118,8 @@ describe('the weekly audit', () => {
     await register('Acme Portal', ACME_REPO);
     const { run, summary, posted } = await audit();
     expect(posted).toBe('posted');
-    expect(summary).toBe('1 critical, 2 warnings, 1 of 4 services healthy');
+    // No model is configured in this test: the rules rank, and both the run and the message say so.
+    expect(summary).toBe('1 critical, 2 warnings, 1 of 4 services healthy; ranked by rules (AI not configured)');
     expect(run.status).toBe('done');
     expect(run.counts).toMatchObject({ projects: 2, services: 4, critical: 1, warning: 2, healthy: 1, muted: 0, resolved: 0 });
 
@@ -137,7 +139,7 @@ describe('the weekly audit', () => {
     expect(message.channel).toBe(CHANNEL);
     expect(lines(message)).toEqual([
       '*Weekly Railway audit · 2 projects · 4 services*',
-      '1 critical · 2 warnings · 1 healthy',
+      '1 critical · 2 warnings · 1 healthy · ranked by rules (AI not configured)',
       '1. Acme Portal api crashed 4 times in the last 7 days',
       '2. Acme Portal Postgres has 1 unpatched vulnerability notice from Railway (CVE-2099-0001)',
       '3. Globex Sync sync still reads /railway.json, which Railway stops reading on 2026-12-01',
@@ -452,7 +454,7 @@ describe('Fix via agent', () => {
     await register('Acme Portal', ACME_REPO);
     const { run } = await audit();
     const finding = (await getFinding(pool, run.report!.top[0]!.findingId))!;
-    const brief = fixBrief({
+    const brief = ruleBrief({
       ...finding,
       evidence: [{ quote: 'connect failed postgres://app:hunter2@db.internal:5432/app for ada@example.com', source: 'error logs' }],
     });
@@ -528,7 +530,7 @@ describe('findings from week to week', () => {
     const second = await audit(new Date(NOW.getTime() + WEEK));
     expect(second.run.counts).toMatchObject({ critical: 0, warning: 1, muted: 1, accepted: 1 });
     expect(second.run.report!.findings.map((f) => f.id)).not.toContain(crash!.id);
-    expect(lines(h.slack.of('postMessage')[0]!)[1]).toBe('0 critical · 1 warning · 3 healthy');
+    expect(lines(h.slack.of('postMessage')[0]!)[1]).toBe('0 critical · 1 warning · 3 healthy · ranked by rules (AI not configured)');
     expect((await listFindings(pool, ['muted'])).map((f) => [f.id, f.stateBy, f.stateNote])).toEqual([[crash!.id, APPROVER, 'Known; being replaced']]);
 
     await setFindingState(pool, crash!.id, 'open', OWNER);

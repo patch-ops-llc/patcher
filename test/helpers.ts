@@ -39,7 +39,7 @@ export async function resetDb(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE settings, channel_routes, slack_channels, schedules, users, sessions, recommendations,
              approvals, actions, webhook_events, runs, audit_log, projects, project_links, project_checks,
-             railway_inventory, probe_results, audit_runs, audit_findings, agent_runs, integrations
+             railway_inventory, probe_results, audit_runs, audit_findings, agent_runs, integrations, llm_calls
              RESTART IDENTITY CASCADE`);
   await pool.query(`
     INSERT INTO schedules (key, cron_expr, tz) VALUES
@@ -174,15 +174,18 @@ export function testIntegrations(overrides: Partial<Integrations> = {}): Integra
   const railway = overrides.railway ?? null;
   const github = overrides.github ?? null;
   const cursor = overrides.cursor ?? null;
+  const model = overrides.model ?? null;
   return {
     railway,
     github,
     cursor,
+    model,
     probe: overrides.probe ?? (() => Promise.reject(new Error('no prober in this test'))),
     status: overrides.status ?? {
       railway: railway ? CONFIGURED : { configured: false, missing: ['RAILWAY_API_TOKEN'] },
       github: github ? CONFIGURED : { configured: false, missing: ['GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_INSTALLATION_ID'] },
       cursor: cursor ? CONFIGURED : { configured: false, missing: ['CURSOR_API_KEY'] },
+      anthropic: model ? CONFIGURED : { configured: false, missing: ['ANTHROPIC_API_KEY'] },
     },
   };
 }

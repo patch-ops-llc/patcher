@@ -45,6 +45,8 @@ export interface ReportFinding {
   isNew: boolean;
   growing: boolean;
   fix: FixInfo;
+  /** The wording, cause and recommendation were drafted by the model and passed the checks. */
+  ai?: boolean;
 }
 
 export interface AuditCounts {
@@ -67,6 +69,41 @@ export interface TopItem {
   recommendationId: string | null;
 }
 
+export type StepStatus = 'done' | 'partial' | 'skipped' | 'failed';
+
+/** One model step of the analysis and how it went, in a sentence for the run's page. */
+export interface AnalysisStep {
+  key: 'service' | 'rollup' | 'brief';
+  status: StepStatus;
+  detail: string;
+}
+
+/** Why the rules ranked the report instead of the model. */
+export type RulesReason = 'not_configured' | 'disabled' | 'budget' | 'failed';
+
+/** What goes on the counts line of the Slack message when the rules ranked. A few words, so the message stays five lines. */
+export const RULES_NOTE: Record<RulesReason, string> = {
+  not_configured: 'ranked by rules (AI not configured)',
+  disabled: 'ranked by rules (AI is switched off)',
+  budget: 'ranked by rules (AI budget reached)',
+  failed: 'ranked by rules (AI ranking failed)',
+};
+
+export const RULES_DETAIL: Record<RulesReason, string> = {
+  not_configured: 'ANTHROPIC_API_KEY is not set on the worker',
+  disabled: 'the model is switched off for the audit in Settings',
+  budget: 'the budget for audit model calls is used up',
+  failed: 'the model did not return a usable ranking',
+};
+
+export interface AnalysisInfo {
+  /** Who decided the order of the findings. */
+  ranking: 'model' | 'rules';
+  /** Why the rules ranked: the model could not be asked, or its ranking could not be used. Null when it ranked, or had nothing to rank. */
+  reason: RulesReason | null;
+  steps: AnalysisStep[];
+}
+
 export interface AuditReport {
   version: 1;
   generatedAt: string;
@@ -81,7 +118,13 @@ export interface AuditReport {
   unread: UnreadEnvironment[];
   integrations: Record<string, FeatureStatus>;
   railwayRequests: number;
+  /** Absent on reports from before the model steps existed, and while a run waits for its analysis. */
+  analysis?: AnalysisInfo;
 }
+
+/** The few words added to the counts line, or null when the model ranked or there was nothing to rank. */
+export const rulesNote = (report: Pick<AuditReport, 'analysis'>): string | null =>
+  report.analysis?.ranking === 'rules' && report.analysis.reason ? RULES_NOTE[report.analysis.reason] : null;
 
 export function history(finding: Pick<TrackedFinding, 'weeksOpen' | 'isNew' | 'growing'>): string {
   const parts: string[] = [];
@@ -110,20 +153,25 @@ export function toReportFinding(finding: TrackedFinding, fix: FixInfo): ReportFi
     isNew: finding.isNew,
     growing: finding.growing,
     fix,
+    ...(finding.assessment ? { ai: true } : {}),
   };
 }
 
-export function topLine(finding: ReportFinding): string {
+/**
+ * A finding's line in the Slack message. The subject and the history are always put there
+ * by code; `wording` is the model's line for the message when it drafted one that passed.
+ */
+export function topLine(finding: ReportFinding, wording?: string): string {
   const tail = history(finding);
   // "new" says nothing on a first report, where everything is new; it is kept for the UI.
   const suffix = tail && tail !== 'new' ? ` · ${tail}` : '';
-  return `${finding.subject} ${finding.title}${suffix}`;
+  return `${finding.subject} ${wording ?? finding.title}${suffix}`;
 }
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
-export function countsLine(counts: AuditCounts): string {
-  return `${counts.critical} critical · ${plural(counts.warning, 'warning')} · ${counts.healthy} healthy`;
+export function countsLine(counts: AuditCounts, note?: string | null): string {
+  return `${counts.critical} critical · ${plural(counts.warning, 'warning')} · ${counts.healthy} healthy${note ? ` · ${note}` : ''}`;
 }
 
 export function titleLine(counts: AuditCounts): string {
@@ -183,6 +231,14 @@ export function renderMarkdown(report: AuditReport, options: { maxFindings?: num
   }
 
   const max = options.maxFindings ?? report.findings.length;
+  if (report.analysis) {
+    out.push(
+      report.analysis.ranking === 'model'
+        ? 'Ranked by the model on top of the rule-based checks.'
+        : `Ranked by the rules${report.analysis.reason ? `: ${RULES_DETAIL[report.analysis.reason]}` : ''}.`,
+      '',
+    );
+  }
   out.push('## Findings, ranked', '');
   if (!report.findings.length) out.push('No open findings.', '');
   report.findings.slice(0, max).forEach((f, i) => {

@@ -281,9 +281,9 @@ export async function listEnabledChecks(db: Queryable): Promise<(ProjectCheck & 
 }
 
 /** The registry project a repository belongs to, if it is linked and the project is active. */
-export async function projectForRepo(db: Queryable, repo: string): Promise<{ id: string; name: string } | null> {
-  const { rows } = await db.query<{ id: string; name: string }>(
-    `SELECT p.id, p.name FROM project_links l JOIN projects p ON p.id = l.project_id
+export async function projectForRepo(db: Queryable, repo: string): Promise<{ id: string; name: string; description: string } | null> {
+  const { rows } = await db.query<{ id: string; name: string; description: string }>(
+    `SELECT p.id, p.name, p.description FROM project_links l JOIN projects p ON p.id = l.project_id
       WHERE l.kind = 'repo' AND l.external_id = $1 AND p.status = 'active'`,
     [repo.toLowerCase()],
   );
