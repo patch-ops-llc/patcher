@@ -4,7 +4,7 @@ The PatchOps operations bot. It watches PatchOps' work, posts short recommendati
 PatchOps Slack workspace, and acts only after a person on the approver list approves the
 exact action shown.
 
-This repository holds five phases:
+This repository holds six phases:
 
 - **Phase 0, the foundation**: the two services, the database, the job queue and scheduler,
   the Slack hub app, the control UI, settings, the audit log, the pause switch, and the
@@ -27,6 +27,12 @@ This repository holds five phases:
   other workspaces, forwarded. A code filter, then a model that sorts each conversation
   and words one recommendation with the message's own words as evidence. What is urgent is
   posted as one short message; the rest is a digest. Nothing is posted as the owner.
+- **Phase 4b, the Slack companion**: a read-only Chrome extension for a reader profile in
+  the owner's browser, for workspaces where the app cannot be installed. It listens to
+  what Slack's web client receives and posts messages to Patcher with a device key, into
+  the same reader. Each workspace is switched on separately and starts off. **Its capture
+  method has not been run against Slack**; [`docs/slack-companion.md`](docs/slack-companion.md)
+  says what is verified and what the spike has to show.
 
 - Setting it up: [`docs/setup-checklist.md`](docs/setup-checklist.md)
 - Slack app: [`slack/manifest.yaml`](slack/manifest.yaml)
@@ -339,7 +345,7 @@ deal room.
 ```
 PatchOps message events ─┐
 forwarded Slack mail ────┼─▶ receiveCaptured (src/inbox/capture.ts)
-(phase 4b: companion) ───┘        │ code: filter ▸ dedupe ▸ store ▸ bundle by thread or channel
+browser companion ───────┘        │ code: filter ▸ dedupe ▸ store ▸ bundle by thread or channel
                                   ▼ after the settle window (3 minutes)
                     inbox.bundle  names and thread context ▸ did he already reply?
                                   model (small): none | fyi | reply | task | escalate, urgency,
@@ -354,10 +360,7 @@ forwarded Slack mail ────┼─▶ receiveCaptured (src/inbox/capture.ts
 - **The seam** (`src/inbox/capture.ts`). Every source ends in `receiveCaptured` with one
   shape, `CapturedMessage`: workspace, source, channel, sender, text, time, and Slack's
   timestamp and link where the source knows them. A source authenticates its sender and
-  finds the workspace; from the seam on nothing depends on where a message came from. The
-  browser companion of phase 4b is a third caller: its sources (`companion_page`,
-  `companion_notification`) and read mode are already in the schema, and it needs an
-  endpoint with device keys in front of the same function.
+  finds the workspace; from the seam on nothing depends on where a message came from.
 - **PatchOps through the app** (`src/inbox/slackEvents.ts`, `src/inbox/reader.ts`). An owner
   grants the hub app ten read-only user scopes from **Slack inbox → Connect PatchOps**.
   `web` exchanges the code, checks the workspace, the person and the scopes, and stores the
@@ -373,6 +376,17 @@ forwarded Slack mail ────┼─▶ receiveCaptured (src/inbox/capture.ts
   added switched off and its mail is not read until a person switches it on. Only the
   outcome, the sender and, for a week, the subject of a mail that was not from Slack are
   logged.
+- **The browser companion** (`extension/`, `src/inbox/companion.ts`,
+  `src/inbox/companionWatch.ts`; [`docs/slack-companion.md`](docs/slack-companion.md)). A
+  Chrome extension with permission for `app.slack.com` only. A script in the page's world
+  listens to the sockets the page opens, without reading their address, and passes on the
+  listed fields of two kinds of frame; everything else is counted and dropped. The
+  extension's background worker posts to `/ingest/slack` with a device key, of which
+  Patcher stores a hash, and reports every minute. A workspace it reports is added
+  switched off. The server checks the workspace's switches and its capture level again,
+  whatever the extension sent. From the minute reports come coverage by hour, the gaps,
+  and the notes in the hub: signed out, tab gone, reader silent, open but hearing nothing.
+  None of this has been run against Slack.
 - **The filter**, in code, before anything is stored: system messages, bots, Patcher's own
   channels, channels left out by a rule, direct messages where they are switched off,
   messages with no text. Each drop is counted by reason and day and nothing else is kept.
@@ -392,7 +406,8 @@ forwarded Slack mail ────┼─▶ receiveCaptured (src/inbox/capture.ts
   decisions are Patcher's own summaries from the same workspace.
 - **Recheck.** Before a model call, after it, and before every digest: if the owner has
   written in that conversation since, the item is closed as handled. This works where his
-  own messages are seen, which is PatchOps; mail cannot show it.
+  own messages are seen, which is PatchOps and a workspace the companion reads at the
+  wider level (at the narrower one, direct messages only); mail cannot show it.
 - **Delivery** (`src/inbox/delivery.ts`). Urgent is the model's `escalate` or `now`, or a
   channel marked **Always urgent**. A digest-only channel never interrupts; during quiet
   hours only an escalation or an always-urgent channel does; when the channel has had its
@@ -427,6 +442,7 @@ RAILWAY_API_TOKEN=... npx tsx scripts/audit-dry-run.ts --out /somewhere/outside/
 ## Layout
 
 ```
+extension/             the Slack companion: a Chrome extension, loaded unpacked, no build step
 migrations/            versioned SQL, applied by `npm run migrate`
 prompts/               the model prompts, one folder per task, one file per version
 public/                the control UI's stylesheet
@@ -449,8 +465,9 @@ src/
   fix/                              "Fix via agent": the action, its brief, the agent poll
   github/                           read-only GitHub App client
   inbox/                            the Slack reader: the capture seam, hub message events, the
-                                    reader's token, forwarded mail, the filter and bundles, the two
-                                    model steps, the item message and the digest, retention
+                                    reader's token, forwarded mail, the browser companion's keys,
+                                    routes and health, the filter and bundles, the two model
+                                    steps, the item message and the digest, retention
   integrations/                     which outside systems are configured, and when they last answered
   probes/                           the HTTP prober and the five-minute probe run
   queue/                            job names and payloads, the pg-boss wrapper
@@ -556,6 +573,14 @@ npm run build
 
 The test run rebuilds the test database from `migrations/` each time.
 
+The extension is tested with the rest, in a stand-in browser. One more run loads it into a
+real Chrome against a made-up site in Slack's place; it needs Chrome, takes two minutes
+and is not part of `npm test`:
+
+```bash
+EXTENSION_E2E=1 npx vitest run test/extension-e2e.test.ts
+```
+
 ## Rules the code holds to
 
 - No secret in the repository, in a log line or in an error message. Configuration errors
@@ -568,6 +593,10 @@ The test run rebuilds the test database from `migrations/` each time.
   token once, when Slack hands it over, and stores it sealed.
 - Slack is read with read-only scopes, in PatchOps only, for one person. Nothing is posted
   as a person. A prompt about one workspace never holds content from another.
+- The browser companion only listens. It makes no request to Slack, sends nothing on
+  Slack's socket, and never reads, stores or sends a Slack cookie or token; it has no
+  browser permission that reaches one. It talks to the paired Patcher address and nowhere
+  else. Nothing is captured from a workspace until a person switches it on.
 - A model drafts and classifies. It is given redacted text, returns data that is validated,
   and cannot start an action. Nothing is used from output that failed validation.
 - Railway is only read. Variable values are never requested.

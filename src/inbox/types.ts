@@ -1,13 +1,17 @@
 /**
  * The Slack reader (design section 8). Where a message came from is recorded on it and
  * nowhere else matters: after capture, a message from the hub app's events, from forwarded
- * mail or, later, from the browser companion goes through the same steps.
+ * mail or from the browser companion goes through the same steps.
  */
 export const SOURCES = ['api', 'companion_page', 'companion_notification', 'email'] as const;
 export type Source = (typeof SOURCES)[number];
 
 export const READ_MODES = ['api', 'companion', 'email_only', 'connect'] as const;
 export type ReadMode = (typeof READ_MODES)[number];
+
+/** What the companion sends for a workspace: direct messages and mentions only, or every message it receives. */
+export const CAPTURE_LEVELS = ['notifications', 'page'] as const;
+export type CaptureLevel = (typeof CAPTURE_LEVELS)[number];
 
 export const CHANNEL_TYPES = ['channel', 'group', 'im', 'mpim', 'unknown'] as const;
 export type ChannelType = (typeof CHANNEL_TYPES)[number];
@@ -40,6 +44,8 @@ export const DROP_REASONS = {
   empty: 'No text (a file or an image only)',
   duplicate: 'Already captured',
   covered_by_api: 'Mail about a workspace that is read through the app',
+  companion_off: 'Sent by the browser companion for a workspace it is not switched on for',
+  above_level: 'Sent by the browser companion, but neither a direct message nor a mention, in a workspace set to those only',
 } as const;
 export type DropReason = keyof typeof DROP_REASONS;
 
@@ -63,6 +69,9 @@ export interface Workspace {
   name: string;
   enabled: boolean;
   readMode: ReadMode;
+  /** Whether the browser companion may capture this workspace, and how much of it. */
+  companionEnabled: boolean;
+  captureLevel: CaptureLevel;
   readDms: boolean;
   channelDefault: 'include' | 'exclude';
   projectId: string | null;
@@ -81,6 +90,8 @@ export interface WorkspaceRow {
   name: string;
   enabled: boolean;
   read_mode: ReadMode;
+  companion_enabled: boolean;
+  capture_level: CaptureLevel;
   read_dms: boolean;
   channel_default: 'include' | 'exclude';
   project_id: string | null;
@@ -99,6 +110,8 @@ export const workspaceFromRow = (r: WorkspaceRow): Workspace => ({
   name: r.name,
   enabled: r.enabled,
   readMode: r.read_mode,
+  companionEnabled: r.companion_enabled,
+  captureLevel: r.capture_level,
   readDms: r.read_dms,
   channelDefault: r.channel_default,
   projectId: r.project_id,

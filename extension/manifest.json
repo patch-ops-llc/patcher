@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Patcher Slack companion",
+  "version": "0.1.0",
+  "description": "Read-only. Passes the messages Slack's web client receives in this profile to your own Patcher. Never posts, never reads cookies or tokens.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["https://app.slack.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["https://app.slack.com/*"], "js": ["tap.js"], "run_at": "document_start", "world": "MAIN" },
+    { "matches": ["https://app.slack.com/*"], "js": ["lib.js", "content.js"], "run_at": "document_start" }
+  ],
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "action": { "default_title": "Patcher Slack companion" }
+}

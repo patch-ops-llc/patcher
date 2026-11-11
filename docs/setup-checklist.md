@@ -33,8 +33,9 @@ What is left is for the owner: section 3 (the Slack app and its six variables), 
 (first run), section 5 (the weekly audit and its variables), section 6 (call transcripts),
 section 7 (sales calls, proposals and the deal room, with three more variables, and one
 more if the deal room's service API is used), section 8
-(the Slack reader: an update to the Slack app, one authorisation, and one more variable if
-forwarded email is wanted), and the last item of section 9 after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
+(the Slack reader: an update to the Slack app, one authorisation, one more variable if
+forwarded email is wanted, and for the browser companion a Chrome profile and no
+variable), and the last item of section 9 after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
 is built, should it ever be rebuilt.
 
 ## 1. Railway project
@@ -663,8 +664,66 @@ some minutes late, without the thread around them, and it cannot show that you h
 replied since. Mail about a workspace that is read through the app is ignored, so
 PatchOps is not read twice.
 
+### E. The browser companion, for other workspaces
+
+A Chrome extension in a profile of its own reads the workspaces where the app cannot be
+installed. It needs no variable and no change to the Slack app. **How it captures has not
+been proven against Slack**: run steps 1 to 4 and the spike in PatchOps first, and switch
+on no client workspace before it passes. What it is, what it sends and what is assumed:
+[`slack-companion.md`](slack-companion.md). What a client's admin can see and what can
+break: design section 8.4.
+
+1. **Reader profile.** In Chrome: profile menu → **Add** → continue without an account.
+   Name it "Slack reader". Everything below happens in that profile.
+2. **Load the extension.** Get the `extension` folder of this repository onto the
+   computer (clone it, or **Code → Download ZIP** on GitHub and unpack). In the reader
+   profile open `chrome://extensions`, turn on **Developer mode**, **Load unpacked**, and
+   choose the `extension` folder. Pin its icon; a click on it opens its page.
+3. **Open Slack in that profile.** `https://app.slack.com/client`, sign in to the
+   workspace, and keep it in a tab of its own. A tab that was open before the extension
+   was loaded has to be reloaded once. Without pairing, the extension's page already shows
+   what it hears, and sends nothing anywhere.
+4. **Reader setup**, once per profile:
+   - Block notifications for `app.slack.com` (the lock icon in the address bar → **Site
+     settings → Notifications → Block**), so you are not alerted twice.
+   - `chrome://settings/performance` → **Always keep these sites active** → add
+     `app.slack.com`.
+   - Pin the Slack tab (right-click the tab → **Pin**). One tab per workspace.
+   - Have the profile open at login: `chrome://settings/onStartup` → **Continue where you
+     left off**, and start that profile's Chrome when you log in to the computer. The
+     window can stay minimised.
+5. **Pair.** Patcher → **Slack inbox → Browser companion**: type a name for the reader and
+   **Pair a reader**. The address and the key are shown once. Paste both into the
+   extension's page and **Pair**. Patcher keeps only a hash of the key. **Revoke** on the
+   same screen stops that reader at its next report.
+6. **Switch a workspace on.** Within a minute each workspace the reader has a tab for
+   appears under **Workspaces**, switched off. For one you want read: tick **Read this
+   workspace**, check that **Read it through the browser companion** is ticked (it is for
+   a workspace the reader found; it is not for one already known from mail or read
+   through the app), choose what the companion sends (**Direct messages and mentions
+   only** to begin with), and save **Your member ID in this workspace** (in Slack: your
+   profile → **⋮ → Copy member ID**), so a mention of you and your own reply are
+   recognised. For PatchOps, which is read through the app, tick **Read it through the
+   browser companion**; a message seen both ways is kept once.
+7. **Reader health** on the same screen shows, per workspace, whether the tab is open,
+   the last message seen, a strip of the last 24 hours and the gaps. The checklist below
+   it marks what the extension can confirm.
+
+What Patcher tells you: a workspace that signed the reader out is one message in the Slack
+inbox channel; sign in again in the reader window. A closed or sleeping tab, a reader that
+stopped reporting (**Settings → Slack inbox**, 15 minutes), and a reader that is open and
+hears nothing are notes in the errors channel, in working hours.
+
+Nothing is captured while Chrome is closed or the computer is asleep, and nothing is read
+afterwards. Forwarded email (part D) is the cover for those hours; a mail about a message
+the companion already kept is dropped.
+
 ### What is sent where
 
+- **From the reader's browser to Patcher**, only for a workspace switched on for the
+  companion: each message's text, IDs, time and names; every minute, counts and the state
+  of each tab. Never a Slack cookie or token: the extension has no permission that
+  reaches one and its page script never reads the socket's address.
 - **To Anthropic**, per conversation that passed the filter: its messages after redaction,
   with the thread before them where the app can read it; display names, the channel name
   and the workspace name; the names of the projects that workspace may be matched to; and
@@ -677,7 +736,8 @@ PatchOps is not read twice.
   evidence are posted only when someone asks for **Details**.
 - **Kept**: message text for 14 days (**Settings → Slack inbox**), then removed along with
   the draft and the quoted words; the link, the IDs and Patcher's summary stay. An edit or
-  a deletion in PatchOps is applied to the stored copy. No search index is built.
+  a deletion in PatchOps is applied to the stored copy, and so is one the companion sees.
+  No search index is built.
 
 Things to know:
 

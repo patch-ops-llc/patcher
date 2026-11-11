@@ -7,6 +7,7 @@ import { recommendationFromRow } from '../recommendations/types.js';
 import type {
   Bundle,
   BundleRow,
+  CaptureLevel,
   ChannelRule,
   ChannelRuleRow,
   Digest,
@@ -23,7 +24,7 @@ import { INBOX_CARRIER, bundleFromRow, digestFromRow, ruleFromRow, workspaceFrom
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID.test(value);
 
-const WORKSPACE_COLUMNS = `id, team_id, domain, name, enabled, read_mode, read_dms, channel_default, project_id, reader_user_id,
+const WORKSPACE_COLUMNS = `id, team_id, domain, name, enabled, read_mode, companion_enabled, capture_level, read_dms, channel_default, project_id, reader_user_id,
   user_token_ct, status, status_detail, last_message_at, last_event_at`;
 
 // Workspaces -----------------------------------------------------------------------------------
@@ -61,6 +62,11 @@ export interface WorkspaceChange {
   channelDefault?: 'include' | 'exclude';
   projectId?: string | null;
   name?: string;
+  /** Whether the browser companion may capture the workspace, and how much it sends. */
+  companionEnabled?: boolean;
+  captureLevel?: CaptureLevel;
+  /** The owner's member id there, which the companion needs to see a mention. Not changed for a workspace read through the app. */
+  readerUserId?: string | null;
 }
 
 /**
@@ -78,29 +84,42 @@ export async function updateWorkspace(pool: Pool, id: string, change: WorkspaceC
       channelDefault: change.channelDefault ?? before.channelDefault,
       projectId: change.projectId === undefined ? before.projectId : change.projectId,
       name: change.name?.trim() || before.name,
+      companionEnabled: change.companionEnabled ?? before.companionEnabled,
+      captureLevel: change.captureLevel ?? before.captureLevel,
+      // The reader of a workspace read through the app is whoever authorised it.
+      readerUserId: change.readerUserId === undefined || before.readMode === 'api' ? before.readerUserId : change.readerUserId,
     };
     const same =
       after.enabled === before.enabled &&
       after.readDms === before.readDms &&
       after.channelDefault === before.channelDefault &&
       after.projectId === before.projectId &&
-      after.name === before.name;
+      after.name === before.name &&
+      after.companionEnabled === before.companionEnabled &&
+      after.captureLevel === before.captureLevel &&
+      after.readerUserId === before.readerUserId;
     if (same) return { changed: false, switchedOff: false };
+    // How a workspace without the app is read follows the companion's switch; mail stays behind it either way.
+    const readMode = before.readMode === 'api' || before.readMode === 'connect' ? before.readMode : after.companionEnabled ? 'companion' : 'email_only';
     await tx.query(
       `UPDATE slack_workspaces
-          SET enabled = $2, read_dms = $3, channel_default = $4, project_id = $5, name = $6, updated_by = $7, updated_at = now()
+          SET enabled = $2, read_dms = $3, channel_default = $4, project_id = $5, name = $6, companion_enabled = $8, capture_level = $9,
+              reader_user_id = $10, read_mode = $11, updated_by = $7, updated_at = now()
         WHERE id = $1`,
-      [id, after.enabled, after.readDms, after.channelDefault, after.projectId, after.name, actor],
+      [id, after.enabled, after.readDms, after.channelDefault, after.projectId, after.name, actor, after.companionEnabled, after.captureLevel, after.readerUserId, readMode],
     );
     const switchedOff = before.enabled && !after.enabled;
     if (switchedOff) await forgetWorkspaceContent(tx, id);
-    await recordAudit(tx, {
-      actor,
-      action: 'inbox.workspace.update',
-      target: id,
-      before: { enabled: before.enabled, readDms: before.readDms, channelDefault: before.channelDefault, projectId: before.projectId },
-      after: { enabled: after.enabled, readDms: after.readDms, channelDefault: after.channelDefault, projectId: after.projectId },
+    const audited = (w: typeof after) => ({
+      enabled: w.enabled,
+      readDms: w.readDms,
+      channelDefault: w.channelDefault,
+      projectId: w.projectId,
+      companion: w.companionEnabled,
+      captureLevel: w.captureLevel,
+      readerUserId: w.readerUserId,
     });
+    await recordAudit(tx, { actor, action: 'inbox.workspace.update', target: id, before: audited({ ...before, name: before.name }), after: audited(after) });
     return { changed: true, switchedOff };
   });
 }

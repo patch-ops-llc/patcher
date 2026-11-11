@@ -92,6 +92,7 @@ describe('settings', () => {
       'inbox.unanalysed_after_minutes': 30,
       'inbox.retention_days': 14,
       'inbox.agent_enabled': true,
+      'inbox.companion_silent_minutes': 15,
       'inbox.email_address': '',
       'inbox.email_senders': '@slack.com, @slack-mail.com',
       'ai.inbox.enabled': true,

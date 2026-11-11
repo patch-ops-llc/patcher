@@ -10,10 +10,10 @@ import type { ChannelType, DropReason, Source, WorkspaceRow } from './types.js';
 import { CHANNEL_TYPES, SOURCES } from './types.js';
 
 /**
- * The seam every capture source goes through (design 8.6, "Receive"). The hub app's events
- * and forwarded notification mail both end in `receiveCaptured`; the browser companion of
- * phase 4b is a third caller. A source authenticates its sender, finds the workspace, and
- * hands over this one shape. From here on nothing depends on where a message came from.
+ * The seam every capture source goes through (design 8.6, "Receive"). The hub app's events,
+ * forwarded notification mail and the browser companion all end in `receiveCaptured`. A
+ * source authenticates its sender, finds the workspace, and hands over this one shape.
+ * From here on nothing depends on where a message came from.
  */
 const SLACK_TS = /^\d{9,11}\.\d{1,6}$/;
 
@@ -72,15 +72,15 @@ export function dedupeKeyOf(message: CapturedMessage): string {
   return `${message.workspaceId}:h:${sha([channel, (message.senderId ?? message.senderName ?? '').toLowerCase(), body, bucket].join('|'))}`;
 }
 
-async function workspaceRow(db: Queryable, id: string): Promise<Pick<WorkspaceRow, 'id' | 'team_id' | 'enabled' | 'read_dms' | 'channel_default' | 'status' | 'read_mode'> | null> {
+async function workspaceRow(db: Queryable, id: string): Promise<WorkspaceSwitches | null> {
   const { rows } = await db.query<WorkspaceRow>(
-    'SELECT id, team_id, enabled, read_dms, channel_default, status, read_mode FROM slack_workspaces WHERE id = $1',
+    'SELECT id, team_id, enabled, read_dms, channel_default, status, read_mode, companion_enabled FROM slack_workspaces WHERE id = $1',
     [id],
   );
   return rows[0] ?? null;
 }
 
-type WorkspaceSwitches = Pick<WorkspaceRow, 'id' | 'team_id' | 'enabled' | 'read_dms' | 'channel_default' | 'status' | 'read_mode'>;
+type WorkspaceSwitches = Pick<WorkspaceRow, 'id' | 'team_id' | 'enabled' | 'read_dms' | 'channel_default' | 'status' | 'read_mode' | 'companion_enabled'>;
 
 /** The part of the filter that depends only on the conversation, so a catch-up can skip a channel without reading it. */
 export async function conversationFilter(
@@ -107,12 +107,48 @@ async function filtered(db: Queryable, workspace: WorkspaceSwitches, message: Ca
   if (!workspace.enabled) return 'workspace_off';
   if (message.source === 'api' && workspace.status !== 'connected') return 'disconnected';
   if (message.source === 'email' && workspace.read_mode === 'api') return 'covered_by_api';
+  // The companion is opted in per workspace (design 8.3); its own endpoint checks this first, and so does the seam.
+  if ((message.source === 'companion_page' || message.source === 'companion_notification') && !workspace.companion_enabled) return 'companion_off';
   if (message.origin === 'system') return 'system';
   if (message.origin === 'bot') return 'bot';
   const reason = await conversationFilter(db, workspace, { id: message.channelId, name: message.channelName, type: message.channelType });
   if (reason) return reason;
   if (!message.own && !message.text.trim()) return 'empty';
   return null;
+}
+
+/** A message's words alone: Slack's markup for a mention, a channel or a link reads differently in mail. */
+const folded = (text: string): string =>
+  text
+    .toLowerCase()
+    .replace(/<@[^>]*>/g, '')
+    .replace(/<[^>|]*\|([^>]*)>/g, '$1')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+
+const MAIL_LAG_MINUTES = 120;
+const MIN_CONTAINED = 20;
+
+/**
+ * Design 8.5, "Dedupe": one message can arrive from the companion and by mail. Mail carries
+ * no Slack timestamp, and its sender and channel are names where the companion has ids, so
+ * the two cannot share a key. Mail is the later of the two, so it is the one compared: it is
+ * a duplicate when the companion already stored the same words in that workspace in the
+ * last two hours. A short message has to match whole; a longer one may be part of the mail.
+ */
+async function alreadyFromCompanion(db: Queryable, workspaceId: string, mail: CapturedMessage): Promise<boolean> {
+  const words = folded(mail.text);
+  if (!words) return false;
+  const { rows } = await db.query<{ text: string }>(
+    `SELECT text FROM slack_messages
+      WHERE workspace_id = $1 AND source IN ('companion_page', 'companion_notification') AND NOT own AND text IS NOT NULL
+        AND sent_at BETWEEN $2::timestamptz - make_interval(mins => $3) AND $2::timestamptz + interval '5 minutes'
+      ORDER BY sent_at DESC LIMIT 200`,
+    [workspaceId, mail.sentAt, MAIL_LAG_MINUTES],
+  );
+  return rows.some((row) => {
+    const seen = folded(row.text);
+    return seen === words || (seen.length >= MIN_CONTAINED && words.includes(seen));
+  });
 }
 
 /**
@@ -130,6 +166,11 @@ export async function receiveCaptured(deps: CaptureDeps, input: CapturedMessage)
     if (reason) {
       await countDrop(tx, workspace.id, reason);
       return reason;
+    }
+
+    if (message.source === 'email' && (await alreadyFromCompanion(tx, workspace.id, message))) {
+      await countDrop(tx, workspace.id, 'duplicate');
+      return 'duplicate';
     }
 
     const retentionDays = await getSetting(tx, 'inbox.retention_days');

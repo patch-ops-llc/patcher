@@ -12,6 +12,8 @@ import { canDecide, hasRole } from '../settings/users.js';
 import { usd } from './aiViews.js';
 import type { SafeHtml } from './html.js';
 import { html } from './html.js';
+import type { CompanionPageData } from './companionViews.js';
+import { CAPTURE_LEVEL, companionBadge, companionSection, suggestedMember } from './companionViews.js';
 import type { PageContext } from './views.js';
 import { csrf, layout, when } from './views.js';
 
@@ -21,7 +23,7 @@ const safeUrl = (url: string | null | undefined): url is string => Boolean(url &
 const READ_MODE: Record<Workspace['readMode'], string> = {
   api: 'Through the app',
   email_only: 'Forwarded email',
-  companion: 'Browser companion (not built yet)',
+  companion: 'Browser companion',
   connect: 'Slack Connect',
 };
 
@@ -73,6 +75,7 @@ export interface InboxPageData {
   hasAlias: boolean;
   /** The forwarding address, shown once, straight after it was issued. */
   issuedAddress?: string | null;
+  companion: CompanionPageData;
 }
 
 export function inboxPage(ctx: PageContext, data: InboxPageData): string {
@@ -86,6 +89,7 @@ export function inboxPage(ctx: PageContext, data: InboxPageData): string {
 
   const workspaceRow = (w: Workspace): SafeHtml => {
     const backfill = data.backfills.get(w.id);
+    const suggested = suggestedMember(w, data.companion.overview);
     return html`<tr>
       <td>
         <strong>${w.name}</strong>
@@ -100,13 +104,18 @@ export function inboxPage(ctx: PageContext, data: InboxPageData): string {
             ? badge('done', 'On')
             : badge('drafted', 'Off')}
         ${w.statusDetail ? html`<div class="bad small">${w.statusDetail}</div>` : ''}
+        ${companionBadge(w, data.companion.overview, data.companion.now)}
         ${w.readMode === 'api' && owner && data.canConnect
           ? html`<div class="small"><a href="/inbox/connect">${w.status === 'connected' ? 'Authorise again' : 'Connect'}</a></div>`
           : ''}
       </td>
       <td>
         ${when(w.lastMessageAt)}
-        ${w.readMode === 'api' ? html`<div class="muted small">last event ${when(w.lastEventAt)}</div>` : html`<div class="muted small">mentions and direct messages only, while you are away</div>`}
+        ${w.readMode === 'api'
+          ? html`<div class="muted small">last event ${when(w.lastEventAt)}</div>`
+          : w.companionEnabled
+            ? html`<div class="muted small">what the reader's browser receives while it runs; mail for mentions and direct messages while you are away</div>`
+            : html`<div class="muted small">mentions and direct messages only, while you are away</div>`}
         ${backfill
           ? html`<div class="muted small">
               Catch-up from ${when(backfill.since)}: ${backfill.status === 'running' ? 'running' : backfill.status === 'done' ? 'done' : `failed (${backfill.error ?? 'unknown'})`},
@@ -125,6 +134,19 @@ export function inboxPage(ctx: PageContext, data: InboxPageData): string {
               <option value="exclude" ${w.channelDefault === 'exclude' ? 'selected' : ''}>are left out</option>
             </select></label>
           <label>Belongs to ${projectSelect('project_id', data.projects, w.projectId, disabled)}</label>
+          ${w.teamId
+            ? html`<label class="check"><input type="checkbox" name="companion_enabled" value="1" ${w.companionEnabled ? 'checked' : ''} ${disabled} /> Read it through the browser companion</label>
+                <label>The companion sends
+                  <select name="capture_level" ${disabled}>
+                    <option value="notifications" ${w.captureLevel === 'notifications' ? 'selected' : ''}>${CAPTURE_LEVEL.notifications.toLowerCase()}</option>
+                    <option value="page" ${w.captureLevel === 'page' ? 'selected' : ''}>${CAPTURE_LEVEL.page.toLowerCase()}</option>
+                  </select></label>`
+            : html`<div class="muted small">The browser companion can be switched on here once a reader has seen this workspace.</div>`}
+          ${w.readMode === 'api'
+            ? ''
+            : html`<label>Your member ID in this workspace
+                <input name="reader_user_id" value="${w.readerUserId ?? ''}" placeholder="U…" maxlength="31" class="mono" ${disabled} /></label>
+                ${suggested ? html`<div class="muted small">The reader's page suggests <code>${suggested}</code>. Check it against your Slack profile ("Copy member ID") before saving it.</div>` : ''}`}
           <div><button type="submit" ${disabled}>Save</button></div>
         </form>
         ${w.readMode === 'api' && w.status === 'connected' && owner
@@ -154,7 +176,8 @@ export function inboxPage(ctx: PageContext, data: InboxPageData): string {
         <h2>Workspaces</h2>
         <p class="muted">
           PatchOps is read through the app, with your own authorisation: read-only scopes, for the conversations you can see.
-          Every other workspace is read only from the notification mail Slack sends you and you forward here. A workspace reads nothing until it is switched on.
+          Every other workspace is read from the notification mail Slack sends you and you forward here, and, where you switch it on, through the
+          <a href="#companion">browser companion</a>. A workspace reads nothing until it is switched on.
           Switching one off deletes the messages stored for it.
         </p>
         ${data.workspaces.length
@@ -182,6 +205,8 @@ export function inboxPage(ctx: PageContext, data: InboxPageData): string {
             </form>`
           : ''}
       </section>
+
+      ${companionSection(ctx, data.companion, data.workspaces)}
 
       <section class="card" id="rules">
         <h2>Channel rules</h2>
@@ -458,7 +483,7 @@ export function inboxSettingsCard(ctx: PageContext, data: { settings: AllSetting
   const s = data.settings;
   const check = (key: 'inbox.enabled' | 'ai.inbox.enabled' | 'inbox.digest_only' | 'inbox.agent_enabled') =>
     html`<label class="check"><input type="checkbox" name="${key}" value="1" ${s[key] ? 'checked' : ''} ${disabled} /> ${settingDefs[key].label}</label>`;
-  const number = (key: 'inbox.settle_seconds' | 'inbox.unanalysed_after_minutes' | 'inbox.retention_days', min: number, max: number) =>
+  const number = (key: 'inbox.settle_seconds' | 'inbox.unanalysed_after_minutes' | 'inbox.retention_days' | 'inbox.companion_silent_minutes', min: number, max: number) =>
     html`<label>${settingDefs[key].label} <input type="number" name="${key}" min="${min}" max="${max}" step="1" value="${s[key]}" ${disabled} /></label>`;
   return html`<section class="card" id="inbox">
     <h2>Slack inbox</h2>
@@ -481,6 +506,7 @@ export function inboxSettingsCard(ctx: PageContext, data: { settings: AllSetting
         <input name="inbox.quiet_tz" value="${s['inbox.quiet_tz']}" class="mono" ${disabled} /></label>
       ${number('inbox.unanalysed_after_minutes', 1, 1440)}
       ${number('inbox.retention_days', 1, 30)}
+      ${number('inbox.companion_silent_minutes', 5, 240)}
       ${check('inbox.agent_enabled')}
       ${(['ai.inbox.model_triage', 'ai.inbox.model_recommend'] as const).map(
         (key) => html`<label>${settingDefs[key].label} <input name="${key}" value="${s[key]}" required class="mono" ${disabled} /></label>`,

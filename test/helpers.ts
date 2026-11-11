@@ -51,7 +51,8 @@ export async function resetDb(pool: Pool): Promise<void> {
              transcript_connections, calls, transcripts, call_analyses, call_suggestions, project_tasks,
              deals, proposals, sales_calls, sales_catalog, deal_room_updates,
              slack_workspaces, slack_channel_rules, slack_digests, slack_bundles, slack_messages, triage_feedback,
-             slack_drop_counts, slack_names, slack_backfills, inbound_aliases, inbound_emails
+             slack_drop_counts, slack_names, slack_backfills, inbound_aliases, inbound_emails,
+             companion_devices, companion_workspace_status, companion_coverage, companion_events
              RESTART IDENTITY CASCADE`);
   await pool.query(`
     INSERT INTO schedules (key, cron_expr, tz) VALUES
@@ -62,7 +63,8 @@ export async function resetDb(pool: Pool): Promise<void> {
       ('retention.purge', '30 3 * * *', 'America/Chicago'),
       ('dealroom.sync', '*/30 * * * *', 'America/Chicago'),
       ('slack.digest', '0 9,13,17 * * 1-5', 'America/Chicago'),
-      ('slack.catchup', '*/5 * * * *', 'America/Chicago')`);
+      ('slack.catchup', '*/5 * * * *', 'America/Chicago'),
+      ('companion.watch', '*/5 * * * *', 'America/Chicago')`);
   await pool.query('DELETE FROM pgboss.job');
 }
 
