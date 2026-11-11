@@ -42,6 +42,12 @@ export interface NewRecommendation {
   risk?: Risk;
   /** A second recommendation with the same key is not created. */
   dedupeKey?: string;
+  /**
+   * A shared Slack message that shows this recommendation as one of its lines, with its own
+   * approve button. The carrier posts and edits that message; the recommendation is decided,
+   * executed and logged like any other.
+   */
+  carrier?: { type: string; id: string };
   createdBy?: Actor;
 }
 
@@ -96,8 +102,9 @@ export async function createRecommendation(
   return withTx(deps.pool, async (tx) => {
     const { rows } = await tx.query<RecommendationRow>(
       `INSERT INTO recommendations
-         (kind, report_type, source_type, source_id, title, body, evidence, proposed_action, action_hash, risk, dedupe_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         (kind, report_type, source_type, source_id, title, body, evidence, proposed_action, action_hash, risk, dedupe_key,
+          carrier_type, carrier_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT (dedupe_key) DO NOTHING
        RETURNING *`,
       [
@@ -112,6 +119,8 @@ export async function createRecommendation(
         hash,
         input.risk ?? 'low',
         input.dedupeKey ?? null,
+        input.carrier?.type ?? null,
+        input.carrier?.id ?? null,
       ],
     );
     if (!rows[0]) {
@@ -127,7 +136,10 @@ export async function createRecommendation(
       target: recommendation.id,
       after: { kind: recommendation.kind, title: recommendation.title, actionHash: hash },
     });
-    await deps.queue.enqueue('recommendation.post', { recommendationId: recommendation.id }, { tx });
+    // A carried recommendation is posted by its carrier, once the shared message is ready.
+    if (!input.carrier) {
+      await deps.queue.enqueue('recommendation.post', { recommendationId: recommendation.id }, { tx });
+    }
     return { recommendation, created: true };
   });
 }

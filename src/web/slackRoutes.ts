@@ -10,6 +10,7 @@ import { getAllSettings } from '../settings/settings.js';
 import { canDecide, getUser, hasRole, touchProfile } from '../settings/users.js';
 import { ACTION_IDS, EDIT_FIELDS, EDIT_MODAL_CALLBACK, clip, decodeRef, editModal, escapeMrkdwn } from '../slack/messages.js';
 import { verifySlackSignature } from '../slack/verify.js';
+import { requestAudit } from '../weekly/request.js';
 import type { WebDeps } from './deps.js';
 
 type Json = Record<string, unknown>;
@@ -117,7 +118,9 @@ export function slackRouter(deps: WebDeps): Router {
 
     if (payload.type === 'block_actions') {
       const action = asObject(Array.isArray(payload.actions) ? payload.actions[0] : undefined);
-      const actionId = asString(action?.action_id);
+      // A message that carries several recommendations suffixes its buttons (`rec_approve:2`),
+      // because Slack wants each action id in a message to be different.
+      const actionId = asString(action?.action_id)?.split(':')[0];
       const ref = decodeRef(action?.value);
       if (!actionId || !ref || !Object.values(ACTION_IDS).includes(actionId as never)) {
         res.status(200).end();
@@ -211,7 +214,7 @@ export function slackRouter(deps: WebDeps): Router {
 
   // /ops ---------------------------------------------------------------------------------
 
-  const USAGE = 'Usage: `/ops status`, `/ops pending`, `/ops pause`, `/ops resume`';
+  const USAGE = 'Usage: `/ops status`, `/ops pending`, `/ops audit now`, `/ops pause`, `/ops resume`';
 
   router.post('/commands', async (_req, res) => {
     const form = new URLSearchParams(rawBody(res));
@@ -273,6 +276,20 @@ export function slackRouter(deps: WebDeps): Router {
           }
           const { changed } = await setPaused(deps, false, person.slackUserId);
           reply(changed ? 'Resumed.' : 'Patcher is not paused.');
+          return;
+        }
+        case 'audit': {
+          const words = (form.get('text') ?? '').trim().toLowerCase().split(/\s+/);
+          if (words[1] !== 'now') {
+            reply(`<${deps.appBaseUrl}/audits|Open the latest audit> · \`/ops audit now\` starts one`);
+            return;
+          }
+          if (!hasRole(person, 'approver')) {
+            reply('Only an approver or owner can start an audit.');
+            return;
+          }
+          const result = await requestAudit(deps, person.slackUserId);
+          reply(result.started ? 'Audit started. The report is posted when it finishes, in a few minutes.' : result.reason);
           return;
         }
       default:

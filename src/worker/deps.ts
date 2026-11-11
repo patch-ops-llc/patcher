@@ -1,14 +1,34 @@
 import type { Pool } from '../db/pool.js';
 import type { Logger } from '../log.js';
 import type { Enqueuer } from '../queue/queue.js';
+import type { Carriers } from '../recommendations/carriers.js';
 import type { Catalog } from '../recommendations/catalog.js';
+import type { FeatureStatus } from '../config.js';
+import type { CursorClient } from '../cursor/client.js';
+import type { GitHubClient } from '../github/client.js';
+import type { Prober } from '../probes/probe.js';
+import type { RailwayReader } from '../railway/client.js';
 import type { SlackClient } from '../slack/client.js';
+
+/**
+ * The outside systems the audit talks to. A client is null until its variables are set; the
+ * code that would use it says "not configured" instead of failing.
+ */
+export interface Integrations {
+  railway: RailwayReader | null;
+  github: GitHubClient | null;
+  cursor: CursorClient | null;
+  probe: Prober;
+  status: { railway: FeatureStatus; github: FeatureStatus; cursor: FeatureStatus };
+}
 
 /** What every job handler in the worker is given. */
 export interface WorkerDeps {
   pool: Pool;
   queue: Enqueuer;
   catalog: Catalog;
+  /** Shared Slack messages that carry several recommendations (the audit report). */
+  carriers: Carriers;
   slack: SlackClient;
   log: Logger;
   /** The hub workspace. Undefined until the Slack variables are set. */
@@ -16,4 +36,5 @@ export interface WorkerDeps {
   appBaseUrl: string;
   /** `DRY_RUN=1` in the environment, which forces dry run whatever the UI switch says. */
   dryRunEnv: boolean;
+  integrations: Integrations;
 }

@@ -2,9 +2,10 @@ import { recordAudit, SYSTEM_ACTOR } from '../audit/auditLog.js';
 import { withTx } from '../db/pool.js';
 import { getSetting, isDryRun } from '../settings/settings.js';
 import { SlackApiError } from '../slack/client.js';
-import { clip, outcomeReply, recommendationMessage } from '../slack/messages.js';
+import { clip, outcomeReply } from '../slack/messages.js';
 import type { WorkerDeps } from '../worker/deps.js';
 import type { ActionResult } from './catalog.js';
+import { renderRecommendation } from './delivery.js';
 import { getRecommendation } from './service.js';
 import type { ActionRecord, ActionRow } from './types.js';
 import { actionFromRow } from './types.js';
@@ -110,11 +111,7 @@ async function report(deps: WorkerDeps, action: ActionRecord, summary?: string):
   const rec = await getRecommendation(deps.pool, action.recommendationId);
   if (rec?.slackChannel && rec.slackTs) {
     try {
-      await deps.slack.updateMessage({
-        channel: rec.slackChannel,
-        ts: rec.slackTs,
-        ...recommendationMessage(rec, deps.catalog.label(rec.kind)),
-      });
+      await renderRecommendation(deps, rec);
       await deps.slack.postMessage({
         channel: rec.slackChannel,
         threadTs: rec.slackTs,
@@ -178,7 +175,14 @@ async function runLocked(deps: WorkerDeps, actionId: string): Promise<ExecuteOut
       log.info('dry run: action not executed', { request: action.request });
       outcome = { ok: true, result: {} };
     } else {
-      outcome = { ok: true, result: await definition.execute(params, { idempotencyKey: action.idempotencyKey, log }) };
+      outcome = {
+        ok: true,
+        result: await definition.execute(params, {
+          idempotencyKey: action.idempotencyKey,
+          recommendationId: action.recommendationId,
+          log,
+        }),
+      };
     }
   } catch (err) {
     log.warn('action failed', { err });

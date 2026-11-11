@@ -23,11 +23,13 @@ export interface PageContext {
 const NAV = [
   { href: '/', label: 'Home' },
   { href: '/approvals', label: 'Approvals' },
+  { href: '/audits', label: 'Audits' },
+  { href: '/projects', label: 'Projects' },
   { href: '/settings', label: 'Settings' },
   { href: '/activity', label: 'Activity' },
 ];
 
-const when = (date: Date | null | undefined): SafeHtml =>
+export const when = (date: Date | null | undefined): SafeHtml =>
   date
     ? html`<time datetime="${date.toISOString()}" title="${date.toISOString()}">${date
         .toISOString()
@@ -35,7 +37,7 @@ const when = (date: Date | null | undefined): SafeHtml =>
         .replace('T', ' ')} UTC</time>`
     : html`<span class="muted">never</span>`;
 
-const csrf = (ctx: PageContext) => html`<input type="hidden" name="_csrf" value="${ctx.session.csrfToken}" />`;
+export const csrf = (ctx: PageContext) => html`<input type="hidden" name="_csrf" value="${ctx.session.csrfToken}" />`;
 
 const personName = (users: Map<string, User>, id: string | null): string =>
   id === null ? '' : id === 'system' ? 'Patcher' : (users.get(id)?.displayName ?? id);
@@ -477,6 +479,8 @@ export function settingsPage(
             <input type="number" name="approvals.reminder_hours" min="1" max="720" value="${data.settings['approvals.reminder_hours']}" ${disabled} /></label>
           <label>${settingDefs['slack.max_posts_per_hour'].label}
             <input type="number" name="slack.max_posts_per_hour" min="1" max="60" value="${data.settings['slack.max_posts_per_hour']}" ${disabled} /></label>
+          <label>${settingDefs['audit.agent_timeout_minutes'].label}
+            <input type="number" name="audit.agent_timeout_minutes" min="10" max="1440" value="${data.settings['audit.agent_timeout_minutes']}" ${disabled} /></label>
           <div><button type="submit" ${disabled}>Save</button></div>
         </form>
         <p class="muted small">The global pause is on the Home screen and in <code>/ops pause</code>.</p>
@@ -555,6 +559,14 @@ function roleSelect(current: Role, disabled: string): SafeHtml {
 
 // Activity ------------------------------------------------------------------------------------
 
+/** Where an audit-log target lives, from the action that wrote it. */
+function targetPath(action: string): string {
+  if (action.startsWith('finding.')) return '/audits/findings';
+  if (action.startsWith('audit.')) return '/audits';
+  if (action.startsWith('project.')) return '/projects';
+  return '/approvals';
+}
+
 export function activityPage(
   ctx: PageContext,
   data: { audit: AuditRow[]; runs: RunRow[]; users: Map<string, User>; nextBefore: string | null },
@@ -573,7 +585,7 @@ export function activityPage(
             ${data.audit.map(
               (a) => html`<tr>
                 <td>${when(a.at)}</td><td>${personName(data.users, a.actor)}</td><td><code>${a.action}</code></td>
-                <td>${a.target && /^[0-9a-f-]{36}$/.test(a.target) ? html`<a href="/approvals/${a.target}"><code>${a.target.slice(0, 8)}</code></a>` : html`<code>${a.target ?? ''}</code>`}</td>
+                <td>${a.target && /^[0-9a-f-]{36}$/.test(a.target) ? html`<a href="${targetPath(a.action)}/${a.target}"><code>${a.target.slice(0, 8)}</code></a>` : html`<code>${a.target ?? ''}</code>`}</td>
                 <td class="json">${compact(a.before)}</td><td class="json">${compact(a.after)}</td>
               </tr>`,
             )}

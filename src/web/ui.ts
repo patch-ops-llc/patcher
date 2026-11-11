@@ -22,6 +22,8 @@ import { SettingValidationError, getAllSettings, setSetting } from '../settings/
 import type { Role, User } from '../settings/users.js';
 import { ROLES, UserChangeError, canDecide, hasRole, listUsers, removeUser, saveUser } from '../settings/users.js';
 import { OidcError } from '../slack/oidc.js';
+import { resumeHeldReports } from '../weekly/delivery.js';
+import { auditRoutes } from './auditUi.js';
 import { authorizeLogin } from './auth.js';
 import type { WebDeps } from './deps.js';
 import type { Session } from './session.js';
@@ -336,6 +338,7 @@ export function uiRouter(deps: WebDeps): Router {
           [type],
         );
         for (const row of waiting.rows) await deps.queue.enqueue('recommendation.post', { recommendationId: row.id });
+        if (type === 'audit') await resumeHeldReports(deps);
       }
       await back(res, '/settings#routing', 'ok', changed ? `${REPORT_TYPES[type].label} channel saved.` : 'Nothing changed.');
     } catch (err) {
@@ -379,7 +382,7 @@ export function uiRouter(deps: WebDeps): Router {
     const actor = actorOf(res);
     try {
       if (!deps.dryRunEnv) await setSetting(deps.pool, 'dry_run', body.dry_run === '1', actor);
-      for (const key of ['approvals.expire_hours', 'approvals.reminder_hours', 'slack.max_posts_per_hour'] as const) {
+      for (const key of ['approvals.expire_hours', 'approvals.reminder_hours', 'slack.max_posts_per_hour', 'audit.agent_timeout_minutes'] as const) {
         const raw = text(body[key]);
         if (raw) await setSetting(deps.pool, key, Number(raw), actor);
       }
@@ -467,6 +470,8 @@ export function uiRouter(deps: WebDeps): Router {
     const nextBefore = audit.length === PAGE ? audit[audit.length - 1]!.id : null;
     res.send(activityPage(ctx, { audit, runs: runs.rows, users, nextBefore }));
   });
+
+  auditRoutes(router, deps, { context, back, actorOf, userMap, owner, approver });
 
   return router;
 }

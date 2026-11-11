@@ -27,6 +27,12 @@ export const jobSchemas = {
     trigger: z.enum(['schedule', 'manual']),
     scheduledFor: z.string().datetime(),
   }),
+  /** Run the weekly audit. Its own queue, because it runs for minutes and must not be retried blindly. */
+  'audit.run': z.strictObject({ trigger: z.enum(['schedule', 'manual']), requestedBy: z.string() }),
+  /** Post a finished audit's report to the channel routed for audits. */
+  'audit.report.post': z.strictObject({ runId: id }),
+  /** Ask Cursor how an agent started by an approved fix is doing. */
+  'agent.poll': z.strictObject({ agentRunId: id }),
   /** After a resume: pick up what waited while paused. */
   'system.resume': z.strictObject({ requestedBy: z.string() }),
 } as const;

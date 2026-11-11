@@ -39,6 +39,17 @@ const webSchema = baseSchema.extend({
 
 const workerSchema = baseSchema.extend({
   TOKEN_PRIVATE_KEY: optional(z.string().min(100)),
+  // Weekly audit. Each is optional: without it the part that needs it reports "not configured".
+  RAILWAY_API_TOKEN: optional(z.string().min(20)),
+  CURSOR_API_KEY: optional(z.string().min(20)),
+  CURSOR_AGENT_MODEL: optional(z.string().min(1).max(100)),
+  GITHUB_APP_ID: optional(z.string().regex(/^[A-Za-z0-9]+$/)),
+  GITHUB_APP_PRIVATE_KEY: optional(z.string().min(100)),
+  GITHUB_APP_INSTALLATION_ID: optional(z.string().regex(/^\d+$/)),
+  // Development and test only: point the clients at local fakes.
+  RAILWAY_API_URL: optional(z.string().url()),
+  CURSOR_API_URL: optional(z.string().url()),
+  GITHUB_API_URL: optional(z.string().url()),
 });
 
 export class ConfigError extends Error {}
@@ -124,10 +135,32 @@ export function loadWebConfig(env: NodeJS.ProcessEnv = process.env) {
 
 export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = parse(workerSchema, env);
+  if (parsed.NODE_ENV === 'production' && (parsed.RAILWAY_API_URL || parsed.CURSOR_API_URL || parsed.GITHUB_API_URL)) {
+    throw new ConfigError('RAILWAY_API_URL, CURSOR_API_URL and GITHUB_API_URL must not be set in production');
+  }
   const base = common(parsed);
+  const githubVars = {
+    GITHUB_APP_ID: parsed.GITHUB_APP_ID,
+    GITHUB_APP_PRIVATE_KEY: parsed.GITHUB_APP_PRIVATE_KEY,
+    GITHUB_APP_INSTALLATION_ID: parsed.GITHUB_APP_INSTALLATION_ID,
+  };
   return {
     ...base,
     tokenPrivateKey: parsed.TOKEN_PRIVATE_KEY,
+    railwayApiToken: parsed.RAILWAY_API_TOKEN,
+    railwayApiUrl: parsed.RAILWAY_API_URL,
+    cursorApiKey: parsed.CURSOR_API_KEY,
+    cursorAgentModel: parsed.CURSOR_AGENT_MODEL,
+    cursorApiUrl: parsed.CURSOR_API_URL,
+    github:
+      parsed.GITHUB_APP_ID && parsed.GITHUB_APP_PRIVATE_KEY && parsed.GITHUB_APP_INSTALLATION_ID
+        ? {
+            appId: parsed.GITHUB_APP_ID,
+            privateKey: parsed.GITHUB_APP_PRIVATE_KEY,
+            installationId: parsed.GITHUB_APP_INSTALLATION_ID,
+          }
+        : undefined,
+    githubApiUrl: parsed.GITHUB_API_URL,
     features: {
       /** Posting, editing messages, the channel list and the App Home tab. */
       slackApi: feature({
@@ -135,6 +168,12 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
         SLACK_TEAM_ID: parsed.SLACK_TEAM_ID,
       }),
       tokenDecryption: feature({ TOKEN_PRIVATE_KEY: parsed.TOKEN_PRIVATE_KEY }),
+      /** The weekly audit's collectors and the service inventory. Read-only. */
+      railway: feature({ RAILWAY_API_TOKEN: parsed.RAILWAY_API_TOKEN }),
+      /** Commits behind the default branch and dependency alerts, for the audit. */
+      github: feature(githubVars),
+      /** "Fix via agent": starting a Cursor agent on a linked repository after approval. */
+      cursor: feature({ CURSOR_API_KEY: parsed.CURSOR_API_KEY }),
     },
   };
 }

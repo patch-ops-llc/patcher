@@ -26,6 +26,11 @@ export const settingDefs = {
     default: 6,
     label: 'Most recommendations posted to one channel in an hour',
   },
+  'audit.agent_timeout_minutes': {
+    schema: z.number().int().min(10).max(24 * 60),
+    default: 180,
+    label: 'Minutes to wait for a fix agent before giving up on it',
+  },
 } as const;
 
 export type SettingKey = keyof typeof settingDefs;

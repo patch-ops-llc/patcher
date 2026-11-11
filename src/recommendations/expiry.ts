@@ -25,6 +25,8 @@ export async function runExpiry(deps: WorkerDeps, now: Date = new Date()): Promi
 
   let reminded = 0;
   let expired = 0;
+  // Recommendations carried by one message share its thread: one reminder there, not one each.
+  const remindedThreads = new Set<string>();
   for (const { id } of due.rows) {
     await withTx(deps.pool, async (tx) => {
       const { rows } = await tx.query<RecommendationRow>('SELECT * FROM recommendations WHERE id = $1 FOR UPDATE', [id]);
@@ -33,7 +35,9 @@ export async function runExpiry(deps: WorkerDeps, now: Date = new Date()): Promi
       const msLeft = rec.expiresAt!.getTime() - now.getTime();
 
       if (!rec.remindedAt) {
-        if (rec.slackChannel && rec.slackTs) {
+        const thread = `${rec.slackChannel ?? ''}:${rec.slackTs ?? ''}`;
+        if (rec.slackChannel && rec.slackTs && !remindedThreads.has(thread)) {
+          remindedThreads.add(thread);
           try {
             await deps.slack.postMessage({
               channel: rec.slackChannel,
