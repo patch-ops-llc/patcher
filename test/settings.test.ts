@@ -10,6 +10,7 @@ import {
   setRoute,
 } from '../src/settings/routes.js';
 import {
+  DEFAULT_PROPOSAL_TEMPLATE,
   SettingValidationError,
   getAllSettings,
   getSetting,
@@ -65,6 +66,21 @@ describe('settings', () => {
       'ai.calls.daily_budget_usd': 0,
       'ai.calls.monthly_budget_usd': 0,
       'ai.calls.transcript_token_cap': 40000,
+      'sales.enabled': true,
+      'sales.penguin_emails': '',
+      'sales.title_patterns': 'intro, discovery, proposal, demo, scoping',
+      'sales.dealroom_repo': 'patch-ops-llc/penguin-dealroom',
+      'sales.currency': 'USD',
+      'sales.proposal_template': DEFAULT_PROPOSAL_TEMPLATE,
+      'ai.sales.enabled': true,
+      'ai.sales.model_classify': 'claude-sonnet-5-5',
+      'ai.sales.model_brief': 'claude-sonnet-5-5',
+      'ai.sales.model_draft': 'claude-opus-5-5',
+      'ai.sales.model_check': 'claude-sonnet-5-5',
+      'ai.sales.auto_confidence': 0.8,
+      'ai.sales.ask_confidence': 0.5,
+      'ai.sales.daily_budget_usd': 0,
+      'ai.sales.monthly_budget_usd': 0,
     });
   });
 

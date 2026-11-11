@@ -30,3 +30,17 @@ export async function callsModelGate(deps: { pool: Queryable; client: ModelClien
   if (monthly > 0 && (await spentSince(deps.pool, 'calls', 24 * 30)) + estimate >= monthly) return { ok: false, reason: 'budget' };
   return { ok: true, client: deps.client };
 }
+
+/** The same gate for the sales pipeline, against its own switch and budgets. */
+export async function salesModelGate(deps: { pool: Queryable; client: ModelClient | null }, estimate = 0): Promise<ModelGate> {
+  if (await getSetting(deps.pool, 'paused')) return { ok: false, reason: 'paused' };
+  if (!deps.client) return { ok: false, reason: 'not_configured' };
+  if (!(await getSetting(deps.pool, 'ai.sales.enabled'))) return { ok: false, reason: 'disabled' };
+  const [daily, monthly] = await Promise.all([
+    getSetting(deps.pool, 'ai.sales.daily_budget_usd'),
+    getSetting(deps.pool, 'ai.sales.monthly_budget_usd'),
+  ]);
+  if (daily > 0 && (await spentSince(deps.pool, 'sales', 24)) + estimate >= daily) return { ok: false, reason: 'budget' };
+  if (monthly > 0 && (await spentSince(deps.pool, 'sales', 24 * 30)) + estimate >= monthly) return { ok: false, reason: 'budget' };
+  return { ok: true, client: deps.client };
+}

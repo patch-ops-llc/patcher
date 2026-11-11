@@ -5,6 +5,7 @@ import { withTx } from '../db/pool.js';
 import type { Enqueuer } from '../queue/queue.js';
 import type { PreferredCopy } from '../settings/settings.js';
 import { getSetting } from '../settings/settings.js';
+import { closeSalesRecommendations, forgetCallQuotes } from '../sales/store.js';
 import { closeCallRecommendations } from './store.js';
 import type { Attendee, CallRow, NormalizedTranscript, TranscriptOrigin, TranscriptRow } from './types.js';
 
@@ -270,6 +271,11 @@ export async function removeTranscript(deps: IngestDeps, source: TranscriptOrigi
         [gone.call_id],
       );
       await tx.query('DELETE FROM call_analyses WHERE call_id = $1', [gone.call_id]);
+      // The same for what the sales pipeline drew from the call.
+      await closeSalesRecommendations(tx, gone.call_id, { reason: REMOVED, actor: SYSTEM_ACTOR });
+      await forgetCallQuotes(tx, gone.call_id);
+      const sales = await tx.query('SELECT 1 FROM sales_calls WHERE call_id = $1', [gone.call_id]);
+      if (sales.rowCount) await deps.queue.enqueue('sales.post', { callId: gone.call_id }, { tx });
       await tx.query(
         `UPDATE calls SET status = 'deleted', status_detail = $2, summary = NULL, hold_reason = NULL, updated_at = now() WHERE id = $1`,
         [gone.call_id, REMOVED],

@@ -53,6 +53,12 @@ export const jobSchemas = {
   'calls.post': z.strictObject({ callId: id }),
   /** Post a call's quotes and briefs in its thread. */
   'calls.details': z.strictObject({ callId: id }),
+  /** Say what kind of call an analysed call was, and start the proposal pipeline for a sales call. */
+  'sales.classify': z.strictObject({ callId: id }),
+  /** Write the deal brief, the proposal and its check for a sales call. */
+  'sales.draft': z.strictObject({ callId: id }),
+  /** Post or update the one Slack message for a sales call, and offer its proposal for approval. */
+  'sales.post': z.strictObject({ callId: id }),
   /** After a resume: pick up what waited while paused. */
   'system.resume': z.strictObject({ requestedBy: z.string() }),
 } as const;

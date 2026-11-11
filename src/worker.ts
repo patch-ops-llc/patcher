@@ -8,6 +8,8 @@ import { createFathomSource } from './calls/sources/fathom.js';
 import { ConfigError, loadWorkerConfig } from './config.js';
 import { createCursorClient } from './cursor/client.js';
 import { createPool } from './db/pool.js';
+import { createRepoAdapter } from './dealroom/adapter.js';
+import { createDealRoomRepo } from './dealroom/github.js';
 import { registerFixCatalog } from './fix/agentFix.js';
 import { createGitHubClient, parseGitHubPrivateKey } from './github/client.js';
 import { recordConfigured } from './integrations/status.js';
@@ -17,6 +19,9 @@ import { JobQueue } from './queue/queue.js';
 import { createRailwayClient } from './railway/client.js';
 import { Carriers } from './recommendations/carriers.js';
 import { createCatalog } from './recommendations/catalog.js';
+import { registerSalesCatalog } from './sales/catalog.js';
+import { salesCarrier } from './sales/delivery.js';
+import { registerSalesSeam } from './sales/pipeline.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { loadPrivateKey, secretBox } from './security/sealed.js';
 import { createSlackClient, unconfiguredSlackClient } from './slack/client.js';
@@ -38,6 +43,13 @@ async function main(): Promise<void> {
       parseGitHubPrivateKey(config.github.privateKey);
     } catch {
       throw new ConfigError('Missing or invalid environment variables: GITHUB_APP_PRIVATE_KEY');
+    }
+  }
+  if (config.dealRoom) {
+    try {
+      parseGitHubPrivateKey(config.dealRoom.privateKey);
+    } catch {
+      throw new ConfigError('Missing or invalid environment variables: DEALROOM_GITHUB_APP_PRIVATE_KEY');
     }
   }
 
@@ -74,11 +86,16 @@ async function main(): Promise<void> {
       calendly: createCalendlySource(config.calendlyApiUrl ? { baseUrl: config.calendlyApiUrl } : {}),
       fathom: createFathomSource(config.fathomApiUrl ? { baseUrl: config.fathomApiUrl } : {}),
     },
+    // Its own GitHub App, installed on the deal room's repository only. The audit's App is never used to write.
+    dealRoom: config.dealRoom
+      ? createRepoAdapter(createDealRoomRepo({ ...config.dealRoom, ...(config.dealRoomApiUrl ? { baseUrl: config.dealRoomApiUrl } : {}) }))
+      : null,
     status: {
       railway: config.features.railway,
       github: config.features.github,
       cursor: config.features.cursor,
       anthropic: config.features.anthropic,
+      dealroom: config.features.dealroom,
     },
   };
   await recordConfigured(pool, integrations.status);
@@ -86,8 +103,11 @@ async function main(): Promise<void> {
   const deps: WorkerDeps = {
     pool,
     queue,
-    catalog: registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool }),
-    carriers: new Carriers().register(auditCarrier).register(callCarrier),
+    catalog: registerSalesCatalog(
+      registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool }),
+      { pool, appBaseUrl: config.appBaseUrl, dealRoom: integrations.dealRoom },
+    ),
+    carriers: new Carriers().register(auditCarrier).register(callCarrier).register(salesCarrier),
     integrations,
     secrets,
     slack: config.slackBotToken
@@ -99,6 +119,8 @@ async function main(): Promise<void> {
     dryRunEnv: config.dryRunEnv,
   };
 
+  // Sales detection listens to the call pipeline through its seam.
+  registerSalesSeam();
   await registerHandlers(queue, deps);
   const scheduler = new Scheduler({ pool, queue, log });
   scheduler.start();

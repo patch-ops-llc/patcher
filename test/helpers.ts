@@ -11,6 +11,8 @@ import { Carriers } from '../src/recommendations/carriers.js';
 import { createCatalog } from '../src/recommendations/catalog.js';
 import type { Catalog } from '../src/recommendations/catalog.js';
 import type { NewRecommendation } from '../src/recommendations/service.js';
+import { registerSalesCatalog } from '../src/sales/catalog.js';
+import { salesCarrier } from '../src/sales/delivery.js';
 import type { Role } from '../src/settings/users.js';
 import type { SlackChannel } from '../src/settings/routes.js';
 import { SlackApiError } from '../src/slack/client.js';
@@ -43,7 +45,8 @@ export async function resetDb(pool: Pool): Promise<void> {
     TRUNCATE settings, channel_routes, slack_channels, schedules, users, sessions, recommendations,
              approvals, actions, webhook_events, runs, audit_log, projects, project_links, project_checks,
              railway_inventory, probe_results, audit_runs, audit_findings, agent_runs, integrations, llm_calls,
-             transcript_connections, calls, transcripts, call_analyses, call_suggestions, project_tasks
+             transcript_connections, calls, transcripts, call_analyses, call_suggestions, project_tasks,
+             deals, proposals, sales_calls, sales_catalog, deal_room_updates
              RESTART IDENTITY CASCADE`);
   await pool.query(`
     INSERT INTO schedules (key, cron_expr, tz) VALUES
@@ -51,7 +54,8 @@ export async function resetDb(pool: Pool): Promise<void> {
       ('audit.weekly', '0 8 * * 1', 'America/Chicago'),
       ('probe.health', '*/5 * * * *', 'America/Chicago'),
       ('transcripts.poll', '*/15 * * * *', 'America/Chicago'),
-      ('retention.purge', '30 3 * * *', 'America/Chicago')`);
+      ('retention.purge', '30 3 * * *', 'America/Chicago'),
+      ('dealroom.sync', '*/30 * * * *', 'America/Chicago')`);
   await pool.query('DELETE FROM pgboss.job');
 }
 
@@ -181,11 +185,13 @@ export function testIntegrations(overrides: Partial<Integrations> = {}): Integra
   const github = overrides.github ?? null;
   const cursor = overrides.cursor ?? null;
   const model = overrides.model ?? null;
+  const dealRoom = overrides.dealRoom ?? null;
   return {
     railway,
     github,
     cursor,
     model,
+    dealRoom,
     probe: overrides.probe ?? (() => Promise.reject(new Error('no prober in this test'))),
     transcripts: overrides.transcripts ?? { calendly: new FakeSource('calendly'), fathom: new FakeSource('fathom') },
     status: overrides.status ?? {
@@ -193,6 +199,9 @@ export function testIntegrations(overrides: Partial<Integrations> = {}): Integra
       github: github ? CONFIGURED : { configured: false, missing: ['GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_INSTALLATION_ID'] },
       cursor: cursor ? CONFIGURED : { configured: false, missing: ['CURSOR_API_KEY'] },
       anthropic: model ? CONFIGURED : { configured: false, missing: ['ANTHROPIC_API_KEY'] },
+      dealroom: dealRoom
+        ? CONFIGURED
+        : { configured: false, missing: ['DEALROOM_GITHUB_APP_ID', 'DEALROOM_GITHUB_APP_PRIVATE_KEY', 'DEALROOM_GITHUB_APP_INSTALLATION_ID'] },
     },
   };
 }
@@ -201,12 +210,15 @@ export function harness(pool: Pool, overrides: Partial<WorkerDeps> = {}): Harnes
   const queue = new RecordingQueue();
   const slack = new FakeSlack();
   const integrations = overrides.integrations ?? testIntegrations();
-  const catalog = registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool });
+  const catalog = registerSalesCatalog(
+    registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool }),
+    { pool, appBaseUrl: BASE_URL, dealRoom: integrations.dealRoom },
+  );
   const worker: WorkerDeps = {
     pool,
     queue,
     catalog,
-    carriers: new Carriers().register(auditCarrier).register(callCarrier),
+    carriers: new Carriers().register(auditCarrier).register(callCarrier).register(salesCarrier),
     integrations,
     secrets: null,
     slack,

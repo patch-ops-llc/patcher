@@ -23,6 +23,35 @@ const domainList = z
   )
   .refine((value) => value.split(', ').filter(Boolean).every((d) => DOMAIN.test(d)), 'Write domains like example.com, separated by commas.');
 
+const EMAIL = /^[^\s@,<>"]+@[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+const emailList = z
+  .string()
+  .max(1000)
+  .transform((value) => [...new Set(value.toLowerCase().split(/[\s,;]+/).filter(Boolean))].join(', '))
+  .refine((value) => value.split(', ').filter(Boolean).every((e) => EMAIL.test(e)), 'Write whole addresses like name@example.com, separated by commas.');
+
+/** What a proposal looks like until the owner writes their own template (design question 8). */
+export const DEFAULT_PROPOSAL_TEMPLATE = `## Summary
+Two or three sentences: what the prospect wants to achieve and what is proposed.
+
+## Your situation
+The problem as the prospect described it, in their terms.
+
+## Proposed approach
+How the work would be done, in phases where the call suggested them.
+
+## Scope
+What is included, as a list. Only items that were discussed.
+
+## Timeline
+The order of the work and any dates the prospect gave.
+
+## Assumptions
+What the proposal depends on, and what is not yet known.
+
+## Next steps
+What was agreed at the end of the call.`;
+
 /**
  * Every setting the worker reads at run time. A later phase adds a key here with its schema
  * and default; nothing else needs to change for it to be stored, validated and audited.
@@ -140,6 +169,75 @@ export const settingDefs = {
     schema: z.number().int().min(2000).max(150_000),
     default: 40_000,
     label: 'Most transcript tokens sent to the model for one call (a longer call is cut in the middle)',
+  },
+  'sales.enabled': {
+    schema: z.boolean(),
+    default: true,
+    label: 'Look for sales calls among the analysed calls and draft a proposal for each (off: no call is classified)',
+  },
+  'sales.penguin_emails': {
+    schema: emailList,
+    default: '',
+    label: 'Your Penguin email addresses, comma separated (a sales call with one of them on it is a Penguin deal)',
+  },
+  'sales.title_patterns': {
+    schema: z
+      .string()
+      .max(500)
+      .transform((value) => [...new Set(value.split(/[,\n]+/).map((p) => p.trim().toLowerCase()).filter(Boolean))].slice(0, 30).join(', ')),
+    default: 'intro, discovery, proposal, demo, scoping',
+    label: 'Words in a call title that hint at a sales call, comma separated',
+  },
+  'sales.dealroom_repo': {
+    schema: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'Write the repository as owner/name.'),
+    default: 'patch-ops-llc/penguin-dealroom',
+    label: 'Repository of the Penguin deal room, where content pull requests are opened',
+  },
+  'sales.currency': {
+    schema: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z]{3}$/, 'Write a three-letter currency code, like USD.'),
+    default: 'USD',
+    label: 'Currency of the rate card',
+  },
+  'sales.proposal_template': {
+    schema: z.string().trim().min(10, 'The template is too short.').max(8000),
+    default: DEFAULT_PROPOSAL_TEMPLATE,
+    label: 'Proposal template: the sections a proposal has and what each is for',
+  },
+  'ai.sales.enabled': {
+    schema: z.boolean(),
+    default: true,
+    label: 'Use the model for sales calls (off: nothing is classified or drafted until this is on again)',
+  },
+  'ai.sales.model_classify': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that says what kind of call it was' },
+  'ai.sales.model_brief': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that extracts the deal brief' },
+  'ai.sales.model_draft': { schema: modelId, default: TIER_MODELS.top, label: 'Model that writes the proposal' },
+  'ai.sales.model_check': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that checks the proposal against the brief' },
+  'ai.sales.auto_confidence': {
+    schema: z.number().min(0.5).max(1),
+    default: 0.8,
+    label: 'Confidence from which a sales call gets a proposal draft without asking',
+  },
+  'ai.sales.ask_confidence': {
+    schema: z.number().min(0).max(1),
+    default: 0.5,
+    label: 'Confidence from which Patcher asks in Slack whether a call was a sales call',
+  },
+  'ai.sales.daily_budget_usd': {
+    schema: z.number().min(0).max(10_000),
+    default: 0,
+    label: 'Most to spend on sales model calls in 24 hours, in US dollars (0: no cap)',
+  },
+  'ai.sales.monthly_budget_usd': {
+    schema: z.number().min(0).max(100_000),
+    default: 0,
+    label: 'Most to spend on sales model calls in 30 days, in US dollars (0: no cap)',
   },
 } as const;
 
