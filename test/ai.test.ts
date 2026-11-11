@@ -9,6 +9,10 @@ import { CALL_BRIEF_TASK } from '../src/calls/brief.js';
 import { MATCH_TASK } from '../src/calls/match.js';
 import { SUGGEST_TASK } from '../src/calls/suggest.js';
 import { BRIEF_TASK } from '../src/fix/brief.js';
+import { BRIEF_TASK as DEAL_BRIEF_TASK } from '../src/sales/brief.js';
+import { CLASSIFY_TASK } from '../src/sales/classify.js';
+import { DRAFT_TASK } from '../src/sales/draft.js';
+import { CHECK_TASK } from '../src/sales/grounding.js';
 import { SERVICE_TASK } from '../src/weekly/assess.js';
 import { ROLLUP_TASK } from '../src/weekly/rollup.js';
 import { proseReply, usage } from './fixtures/model.js';
@@ -240,6 +244,10 @@ describe('prompts', () => {
       'call-match': MATCH_TASK.tool.name,
       'call-suggestions': SUGGEST_TASK.tool.name,
       'call-brief': CALL_BRIEF_TASK.tool.name,
+      'sales-classify': CLASSIFY_TASK.tool.name,
+      'deal-brief': DEAL_BRIEF_TASK.tool.name,
+      'proposal-draft': DRAFT_TASK.tool.name,
+      'proposal-check': CHECK_TASK.tool.name,
     };
     for (const prompt of prompts) {
       expect(prompt.system, prompt.task).toContain(tools[prompt.task]!);

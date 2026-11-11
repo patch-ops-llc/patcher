@@ -26,9 +26,11 @@ import type { Role, User } from '../settings/users.js';
 import { ROLES, UserChangeError, canDecide, hasRole, listUsers, removeUser, saveUser } from '../settings/users.js';
 import { OidcError } from '../slack/oidc.js';
 import { resumeHeldCallPosts } from '../calls/delivery.js';
+import { resumeHeldSalesPosts } from '../sales/delivery.js';
 import { resumeHeldReports } from '../weekly/delivery.js';
 import { auditRoutes } from './auditUi.js';
 import { MAX_UPLOAD, callRoutes, callsSettings } from './callsUi.js';
+import { MAX_PROPOSAL_FORM, salesRoutes, salesSettings } from './salesUi.js';
 import { authorizeLogin } from './auth.js';
 import type { WebDeps } from './deps.js';
 import type { Session } from './session.js';
@@ -71,6 +73,7 @@ export function uiRouter(deps: WebDeps): Router {
 
   // A pasted transcript is the one form that is long. Its parser runs first; the general one then finds the body read.
   router.post('/calls/upload', express.urlencoded({ extended: false, limit: MAX_UPLOAD }));
+  router.post('/sales/proposals/:id/edit', express.urlencoded({ extended: false, limit: MAX_PROPOSAL_FORM }));
   router.use(express.urlencoded({ extended: false, limit: '100kb' }));
 
   // Sign-in --------------------------------------------------------------------------------
@@ -323,6 +326,7 @@ export function uiRouter(deps: WebDeps): Router {
         settings,
         kinds: deps.catalog.kindNames(),
         callsCard: await callsSettings(deps, ctx, settings),
+        salesCard: await salesSettings(deps, ctx, settings),
         dryRunEnv: deps.dryRunEnv,
         slackReady: slackReady(),
         ai: {
@@ -359,6 +363,7 @@ export function uiRouter(deps: WebDeps): Router {
         for (const row of waiting.rows) await deps.queue.enqueue('recommendation.post', { recommendationId: row.id });
         if (type === 'audit') await resumeHeldReports(deps);
         if (type === 'calls') await resumeHeldCallPosts(deps);
+        if (type === 'sales') await resumeHeldSalesPosts(deps);
       }
       await back(res, '/settings#routing', 'ok', changed ? `${REPORT_TYPES[type].label} channel saved.` : 'Nothing changed.');
     } catch (err) {
@@ -514,6 +519,7 @@ export function uiRouter(deps: WebDeps): Router {
   const helpers = { context, back, actorOf, userMap, owner, approver };
   auditRoutes(router, deps, helpers);
   callRoutes(router, deps, helpers);
+  salesRoutes(router, deps, helpers);
 
   return router;
 }

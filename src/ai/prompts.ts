@@ -14,6 +14,10 @@ export const PROMPTS = {
   'call-match': 'v1',
   'call-suggestions': 'v1',
   'call-brief': 'v1',
+  'sales-classify': 'v1',
+  'deal-brief': 'v1',
+  'proposal-draft': 'v1',
+  'proposal-check': 'v1',
 } as const;
 
 export type PromptTask = keyof typeof PROMPTS;

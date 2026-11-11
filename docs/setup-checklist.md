@@ -31,7 +31,8 @@ deployment that is already running keeps serving in the meantime.
 
 What is left is for the owner: section 3 (the Slack app and its six variables), section 4
 (first run), section 5 (the weekly audit and its variables), section 6 (call transcripts),
-and the last item of section 7 after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
+section 7 (sales calls, proposals and the deal room, with three more variables), and the
+last item of section 8 after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
 is built, should it ever be rebuilt.
 
 ## 1. Railway project
@@ -135,12 +136,27 @@ All on **worker only**. `web` must never hold any of them.
 | `GITHUB_APP_ID` | "Production behind the default branch" and "critical dependency alerts" | The GitHub App's settings page → **About** → App ID |
 | `GITHUB_APP_PRIVATE_KEY` | Same | The GitHub App's settings page → **Private keys** → **Generate a private key**; paste the whole `.pem` file's contents |
 | `GITHUB_APP_INSTALLATION_ID` | Same | After installing the app: the number at the end of the installation's address, `https://github.com/organizations/<org>/settings/installations/<number>` |
-| `ANTHROPIC_API_KEY` | The model that assesses findings, ranks the report and drafts fix briefs; and the one that matches calls and drafts their suggestions | Claude Console (<https://platform.claude.com>) → **API keys** → **Create key** |
+| `ANTHROPIC_API_KEY` | The model that assesses findings, ranks the report and drafts fix briefs; the one that matches calls and drafts their suggestions; and the one that finds sales calls and drafts proposals | Claude Console (<https://platform.claude.com>) → **API keys** → **Create key** |
 
 Each of the four is independent. Without Railway nothing is audited; without Cursor the
 report has no "Fix via agent" buttons; without GitHub two checks are listed as not run;
 without Anthropic the rules rank and word the report, and its second line says
 "ranked by rules (AI not configured)".
+
+### Owner: for the Penguin deal room (step 7)
+
+All on **worker only**. `web` must never hold any of them. They belong to a second GitHub
+App, made for the deal room alone; do not reuse the read-only app's values.
+
+| Variable | Where the value comes from |
+| --- | --- |
+| `DEALROOM_GITHUB_APP_ID` | The deal room GitHub App's settings page → **About** → App ID |
+| `DEALROOM_GITHUB_APP_PRIVATE_KEY` | The same page → **Private keys** → **Generate a private key**; paste the whole `.pem` file's contents |
+| `DEALROOM_GITHUB_APP_INSTALLATION_ID` | After installing the app on the deal room repository: the number at the end of the installation's address |
+
+Without them sales calls are still found and proposals drafted, approved and rendered as
+PDF. Approving a Penguin deal's proposal then fails with "the deal room GitHub App is not
+configured" and a Retry button; nothing is lost.
 
 ### Optional
 
@@ -150,7 +166,7 @@ without Anthropic the rules rank and word the report, and its second line says
 | `LOG_LEVEL` | web, worker | `debug`, `info` (default), `warn`, `error` |
 
 `SLACK_API_URL`, `SLACK_OIDC_URL`, `RAILWAY_API_URL`, `CURSOR_API_URL`, `GITHUB_API_URL`,
-`ANTHROPIC_API_URL`, `CALENDLY_API_URL` and `FATHOM_API_URL` are for local development only
+`ANTHROPIC_API_URL`, `CALENDLY_API_URL`, `FATHOM_API_URL` and `DEALROOM_GITHUB_API_URL` are for local development only
 and are refused when `NODE_ENV=production`.
 
 Calendly and Fathom have no variables. Their keys are typed into **Settings → Calls**
@@ -359,7 +375,95 @@ Things to know:
   and its call waits until Patcher is resumed. In a dry run an approved change is logged
   and no agent is started.
 
-## 7. Later, not needed for the foundation
+## 7. Owner: sales calls, proposals and the Penguin deal room
+
+Sales calls are found among the calls section 6 collects, so that section comes first.
+Steps 1 to 4 need no new variable. Steps 5 to 7 are for the deal room only.
+
+1. **Channel.** Create or choose the sales channel (the design suggests `#ops-sales`),
+   invite the bot, and choose it for **Sales** in **Settings → Slack routing**. Without a
+   channel a drafted proposal waits, and the **Sales** screen says so with "Post to Slack
+   now".
+2. **Penguin addresses.** In **Settings → Sales**, fill in "Your Penguin email addresses":
+   every address you take Penguin calls with, comma separated. A sales call with one of
+   them as its host or among its invitees is a Penguin deal. The addresses stay in
+   Patcher's database; they are not sent to a model or shown in Slack. A person can mark a
+   deal Penguin or not Penguin, in Slack or on the deal's page, and that mark wins over the
+   rule.
+3. **Rate card.** Open **Sales → Template and rate card**. Add each service you sell: a key,
+   a name, what it is, the unit and the price. The currency is in **Settings → Sales** (USD
+   to start with). The model never writes a price: the Investment section of a proposal is
+   built from this list, and a service without a price is shown as "TBD" and listed as a
+   gap. With an empty list every proposal says "Pricing: TBD" and lists "rate card" as a gap.
+4. **Template.** On the same screen, read the proposal template and change it to your own
+   sections. It starts with a general one (summary, your situation, proposed approach, scope,
+   timeline, assumptions, next steps). Leave out pricing: the Investment section is added
+   by Patcher from the rate card.
+5. **Deal room GitHub App.** In the organisation that owns the deal room repository:
+   **Settings → Developer settings → GitHub Apps → New GitHub App**. No webhook, no user
+   authorisation. Repository permissions: **Contents: Read and write**, **Pull requests:
+   Read and write**, **Metadata: Read-only**. No other permission. Create it, generate a
+   private key, and install it on **only** the deal room repository
+   (`patch-ops-llc/penguin-dealroom`). Set the three `DEALROOM_GITHUB_APP_*` variables on
+   `worker`. This is a different app from the read-only one in section 5: that one stays
+   read-only, and this one can reach one repository.
+6. **Protect `main` on the deal room repository.** In the repository: **Settings → Branches**
+   (or **Rules → Rulesets**) → require a pull request before merging on `main`, and do not
+   add the app to any bypass list. Patcher's client can only create a `patcher/…` branch and
+   open a pull request, and has no merge request in its code; this rule makes GitHub refuse
+   a push to `main` as well, whatever the code does. Merging the pull request redeploys the
+   app, and the content is then live to everyone who can open the room.
+7. **Check.** `https://<web address>/health` shows `integrations.dealroom` with
+   `configured: true` once the worker has restarted. **Settings → Sales** shows the same and
+   the repository name ("Repository of the Penguin deal room"; change it only if the
+   repository is renamed).
+
+What happens then:
+
+- A call the model is sure was a sales call (0.80 and above) gets a proposal draft by
+  itself. One it is unsure about (0.50 to 0.80) is asked in the sales channel, "Sales
+  call?", with **Yes, draft proposal** and **No**. Any call can be marked a sales call, or
+  not one, on its page under **Calls**.
+- The drafted proposal arrives as one message: **Review** (read and edit the text),
+  **Approve**, **Regenerate** (with a note for the model), **Not a deal**. The same is on
+  **Sales** and on the proposal's page. Approving makes that version final and links its
+  PDF from the message, for a person to send. Patcher sends nothing to a prospect.
+- For a Penguin deal the message first asks for the room: create the deal in the deal
+  room's `/admin`, with no client domains yet, then click **Enter slug** and type its slug.
+  **Skip** treats the proposal like any other. With the slug set, **Approve** opens a pull
+  request on the deal room repository with the proposal as `content/<slug>/proposal/…`
+  files, and the message becomes **Review PR**. The pull request lists what is left to do
+  by hand: the deal facts in Deal Admin, any edit made in the app that hides a file, and
+  the visuals, which Patcher does not write.
+- Every 30 minutes Patcher reads whether its open deal room pull requests were merged or
+  closed, and the message says so. **Settings → Schedules** has it as `dealroom.sync`.
+- A pasted transcript (**Calls → Add a transcript**) carries no addresses, so the Penguin
+  rule cannot be tested; the message asks **Yes, Penguin** or **Not Penguin**.
+
+What is sent where, once this is on:
+
+- **To Anthropic**, per sales call: the transcript after redaction, attendee names and
+  e-mail domains (not addresses), the call's title; then the brief drawn from it, your
+  template, and the catalog's names, descriptions and units. Never a price, an address or
+  a key.
+- **To GitHub**, only after an approval of a Penguin deal with a slug: the approved
+  proposal's text, as files in a pull request on the deal room repository.
+- **To Slack**: the prospect's company, the first contact's first name, the proposal's
+  one-line summary and its gaps. Never the transcript, the proposal's text or a price.
+
+Things to know:
+
+- **Settings → Sales** has the switch for sales calls, the switch for its model, the two
+  confidence thresholds, the model per step, the title words that hint at a sales call, and
+  a daily and monthly budget (both start unset).
+- Pause and **Dry run** apply here too. In a dry run an approved proposal is logged and
+  neither made final nor sent to the deal room.
+- A second call with the same prospect joins the same deal and its draft is the next
+  version of the proposal. The versions are on the deal's page.
+- A proposal that expires without a decision is not lost: **Regenerate** or **Review**
+  on the message, or the deal's page, offers it again.
+
+## 8. Later, not needed for the foundation
 
 - An external uptime monitor on `https://<web address>/health` (design section 13.1).
 - Railway: restrict who can view the project's variables; turn on two-factor

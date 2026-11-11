@@ -5,6 +5,7 @@ import { registerFixCatalog } from './fix/agentFix.js';
 import { createLogger } from './log.js';
 import { JobQueue } from './queue/queue.js';
 import { createCatalog } from './recommendations/catalog.js';
+import { registerSalesCatalog } from './sales/catalog.js';
 import { loadPublicKey, seal } from './security/sealed.js';
 import { ensureBootstrapOwner } from './settings/users.js';
 import { createSlackClient } from './slack/client.js';
@@ -33,7 +34,7 @@ async function main(): Promise<void> {
     pool,
     queue,
     // Registered without a runtime: the public service validates and describes the action, never runs it.
-    catalog: registerCallCatalog(registerFixCatalog(createCatalog(), null), null),
+    catalog: registerSalesCatalog(registerCallCatalog(registerFixCatalog(createCatalog(), null), null), null),
     log,
     appBaseUrl: config.appBaseUrl,
     cookies: { secret: config.sessionSecret, secure: config.appBaseUrl.startsWith('https://') },

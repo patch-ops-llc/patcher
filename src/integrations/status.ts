@@ -7,6 +7,7 @@ export const INTEGRATIONS = {
   github: 'GitHub',
   cursor: 'Cursor',
   anthropic: 'Anthropic',
+  dealroom: 'Penguin deal room',
 } as const;
 export type IntegrationName = keyof typeof INTEGRATIONS;
 

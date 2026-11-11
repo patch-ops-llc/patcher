@@ -11,6 +11,7 @@ import { getAllSettings } from '../settings/settings.js';
 import { canDecide, getUser, hasRole, touchProfile } from '../settings/users.js';
 import { ACTION_IDS, EDIT_FIELDS, EDIT_MODAL_CALLBACK, clip, decodeRef, editModal, escapeMrkdwn } from '../slack/messages.js';
 import { verifySlackSignature } from '../slack/verify.js';
+import { handleSalesAction, handleSalesModal } from '../sales/slack.js';
 import { requestAudit } from '../weekly/request.js';
 import type { WebDeps } from './deps.js';
 
@@ -123,16 +124,11 @@ export function slackRouter(deps: WebDeps): Router {
       // because Slack wants each action id in a message to be different.
       const actionId = asString(action?.action_id)?.split(':')[0];
       // A call's message has its own buttons; each decision they make still goes through the loop.
-      if (
-        actionId &&
-        (await handleCallAction(deps, {
-          actor,
-          actionId,
-          value: action?.value,
-          triggerId: asString(payload.trigger_id),
-          tell: (text) => tellPrivately(responseUrl, text),
-        }))
-      ) {
+      const click = actionId
+        ? { actor, actionId, value: action?.value, triggerId: asString(payload.trigger_id), tell: (text: string) => tellPrivately(responseUrl, text) }
+        : null;
+      // So has a sales call's. Its Approve and Retry are the loop's own buttons, handled below.
+      if (click && ((await handleCallAction(deps, click)) || (await handleSalesAction(deps, click)))) {
         await touchProfile(deps.pool, actor, { displayName: asString(user?.name) ?? null });
         res.status(200).end();
         return;
@@ -182,7 +178,8 @@ export function slackRouter(deps: WebDeps): Router {
 
     if (payload.type === 'view_submission') {
       const view = asObject(payload.view);
-      const callModal = view ? await handleCallModal(deps, actor, view) : { handled: false as const };
+      let callModal = view ? await handleCallModal(deps, actor, view) : { handled: false as const };
+      if (view && !callModal.handled) callModal = await handleSalesModal(deps, actor, view);
       if (callModal.handled) {
         if (callModal.errors) res.json({ response_action: 'errors', errors: callModal.errors });
         else res.status(200).end();

@@ -46,6 +46,11 @@ const workerSchema = baseSchema.extend({
   GITHUB_APP_ID: optional(z.string().regex(/^[A-Za-z0-9]+$/)),
   GITHUB_APP_PRIVATE_KEY: optional(z.string().min(100)),
   GITHUB_APP_INSTALLATION_ID: optional(z.string().regex(/^\d+$/)),
+  // The Penguin deal room's own GitHub App, installed on that one repository. Without it an
+  // approved Penguin proposal says "not configured" instead of opening a pull request.
+  DEALROOM_GITHUB_APP_ID: optional(z.string().regex(/^[A-Za-z0-9]+$/)),
+  DEALROOM_GITHUB_APP_PRIVATE_KEY: optional(z.string().min(100)),
+  DEALROOM_GITHUB_APP_INSTALLATION_ID: optional(z.string().regex(/^\d+$/)),
   // The model steps of the audit. Without it the audit ranks by its rules and says so.
   ANTHROPIC_API_KEY: optional(z.string().min(20)),
   // Development and test only: point the clients at local fakes.
@@ -55,6 +60,7 @@ const workerSchema = baseSchema.extend({
   ANTHROPIC_API_URL: optional(z.string().url()),
   CALENDLY_API_URL: optional(z.string().url()),
   FATHOM_API_URL: optional(z.string().url()),
+  DEALROOM_GITHUB_API_URL: optional(z.string().url()),
 });
 
 export class ConfigError extends Error {}
@@ -147,10 +153,11 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
       parsed.GITHUB_API_URL ||
       parsed.ANTHROPIC_API_URL ||
       parsed.CALENDLY_API_URL ||
-      parsed.FATHOM_API_URL)
+      parsed.FATHOM_API_URL ||
+      parsed.DEALROOM_GITHUB_API_URL)
   ) {
     throw new ConfigError(
-      'RAILWAY_API_URL, CURSOR_API_URL, GITHUB_API_URL, ANTHROPIC_API_URL, CALENDLY_API_URL and FATHOM_API_URL must not be set in production',
+      'RAILWAY_API_URL, CURSOR_API_URL, GITHUB_API_URL, ANTHROPIC_API_URL, CALENDLY_API_URL, FATHOM_API_URL and DEALROOM_GITHUB_API_URL must not be set in production',
     );
   }
   const base = common(parsed);
@@ -158,6 +165,11 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
     GITHUB_APP_ID: parsed.GITHUB_APP_ID,
     GITHUB_APP_PRIVATE_KEY: parsed.GITHUB_APP_PRIVATE_KEY,
     GITHUB_APP_INSTALLATION_ID: parsed.GITHUB_APP_INSTALLATION_ID,
+  };
+  const dealRoomVars = {
+    DEALROOM_GITHUB_APP_ID: parsed.DEALROOM_GITHUB_APP_ID,
+    DEALROOM_GITHUB_APP_PRIVATE_KEY: parsed.DEALROOM_GITHUB_APP_PRIVATE_KEY,
+    DEALROOM_GITHUB_APP_INSTALLATION_ID: parsed.DEALROOM_GITHUB_APP_INSTALLATION_ID,
   };
   return {
     ...base,
@@ -176,6 +188,15 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
           }
         : undefined,
     githubApiUrl: parsed.GITHUB_API_URL,
+    dealRoom:
+      parsed.DEALROOM_GITHUB_APP_ID && parsed.DEALROOM_GITHUB_APP_PRIVATE_KEY && parsed.DEALROOM_GITHUB_APP_INSTALLATION_ID
+        ? {
+            appId: parsed.DEALROOM_GITHUB_APP_ID,
+            privateKey: parsed.DEALROOM_GITHUB_APP_PRIVATE_KEY,
+            installationId: parsed.DEALROOM_GITHUB_APP_INSTALLATION_ID,
+          }
+        : undefined,
+    dealRoomApiUrl: parsed.DEALROOM_GITHUB_API_URL,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY,
     anthropicApiUrl: parsed.ANTHROPIC_API_URL,
     calendlyApiUrl: parsed.CALENDLY_API_URL,
@@ -195,6 +216,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
       cursor: feature({ CURSOR_API_KEY: parsed.CURSOR_API_KEY }),
       /** Every model call: the audit's analysis, its ranking and the fix briefs. */
       anthropic: feature({ ANTHROPIC_API_KEY: parsed.ANTHROPIC_API_KEY }),
+      /** Opening a content pull request on the Penguin deal room's repository after approval. */
+      dealroom: feature(dealRoomVars),
     },
   };
 }

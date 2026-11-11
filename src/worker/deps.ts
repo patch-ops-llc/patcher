@@ -6,6 +6,7 @@ import type { Catalog } from '../recommendations/catalog.js';
 import type { ModelClient } from '../ai/client.js';
 import type { FeatureStatus } from '../config.js';
 import type { CursorClient } from '../cursor/client.js';
+import type { DealRoomAdapter } from '../dealroom/adapter.js';
 import type { GitHubClient } from '../github/client.js';
 import type { TranscriptSource } from '../calls/sources/source.js';
 import type { Vendor } from '../calls/types.js';
@@ -30,7 +31,12 @@ export interface Integrations {
    * connection it is for, opened from the database.
    */
   transcripts: Record<Vendor, TranscriptSource>;
-  status: { railway: FeatureStatus; github: FeatureStatus; cursor: FeatureStatus; anthropic: FeatureStatus };
+  /**
+   * The Penguin deal room. In this phase it is the repository route: content files in a pull
+   * request. The app's service API (phase 3b) is a second adapter behind the same interface.
+   */
+  dealRoom: DealRoomAdapter | null;
+  status: { railway: FeatureStatus; github: FeatureStatus; cursor: FeatureStatus; anthropic: FeatureStatus; dealroom: FeatureStatus };
 }
 
 /** What every job handler in the worker is given. */

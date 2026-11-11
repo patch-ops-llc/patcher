@@ -75,6 +75,9 @@ export interface Call {
   postError: string | null;
   detailsTs: string | null;
   projectSetBy: string | null;
+  /** What kind of call it was, once the sales pipeline has read it or a person has said. */
+  callType: string | null;
+  callTypeConf: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -100,6 +103,9 @@ export interface CallRow {
   post_error: string | null;
   details_ts: string | null;
   project_set_by: string | null;
+  call_type: string | null;
+  /** numeric, which the driver returns as text. */
+  call_type_conf: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -125,6 +131,8 @@ export const callFromRow = (r: CallRow): Call => ({
   postError: r.post_error,
   detailsTs: r.details_ts,
   projectSetBy: r.project_set_by,
+  callType: r.call_type,
+  callTypeConf: r.call_type_conf === null ? null : Number(r.call_type_conf),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });

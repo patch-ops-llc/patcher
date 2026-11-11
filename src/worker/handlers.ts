@@ -4,6 +4,9 @@ import { postCall, postCallDetails, resumeHeldCallPosts } from '../calls/deliver
 import { purgeTranscripts } from '../calls/ingest.js';
 import { pollAgentRun } from '../fix/agentFix.js';
 import { runProbes } from '../probes/run.js';
+import { postSales, resumeHeldSalesPosts } from '../sales/delivery.js';
+import { syncDealRoom } from '../sales/dealroomSync.js';
+import { classifyCall, draftProposal, resumeWaitingSales } from '../sales/pipeline.js';
 import type { JobQueue } from '../queue/queue.js';
 import { postDetails, postRecommendation, resumeHeld, syncMessage } from '../recommendations/delivery.js';
 import { executeAction } from '../recommendations/executor.js';
@@ -38,11 +41,13 @@ export const scheduleHandlers: Record<string, ScheduleHandler> = {
   'probe.health': (deps) => runProbes(deps),
   // The catch-up for missed webhooks, and the moment calls that were waiting are looked at again.
   'transcripts.poll': async (deps) => {
-    const resumed = await resumeWaitingCalls(deps);
+    const resumed = (await resumeWaitingCalls(deps)) + (await resumeWaitingSales(deps));
     const polled = await pollAll(deps);
     return resumed ? `${polled} ${resumed} waiting ${resumed === 1 ? 'call' : 'calls'} picked up again.` : polled;
   },
   'retention.purge': (deps) => purgeTranscripts(deps.pool),
+  // Reads the state of the deal room pull requests Patcher opened. It never changes one.
+  'dealroom.sync': (deps) => syncDealRoom(deps),
 };
 
 export async function runSchedule(
@@ -158,7 +163,9 @@ export async function registerHandlers(queue: JobQueue, deps: WorkerDeps): Promi
     const reports = await resumeHeldReports(deps);
     const callPosts = await resumeHeldCallPosts(deps);
     const calls = await resumeWaitingCalls(deps);
-    deps.log.info('resumed held work', { ...resumed, auditReports: reports, callPosts, calls });
+    const salesPosts = await resumeHeldSalesPosts(deps);
+    const sales = await resumeWaitingSales(deps);
+    deps.log.info('resumed held work', { ...resumed, auditReports: reports, callPosts, calls, salesPosts, sales });
   });
   await queue.work('audit.run', async (data) => {
     const started = new Date();
@@ -222,6 +229,19 @@ export async function registerHandlers(queue: JobQueue, deps: WorkerDeps): Promi
     deps.log.info('call post', { callId: data.callId, outcome });
   });
   await queue.work('calls.details', (data) => postCallDetails(deps, data.callId));
+
+  await queue.work('sales.classify', async (data) => {
+    const outcome = await classifyCall(deps, data.callId);
+    deps.log.info('sales classify', { callId: data.callId, outcome });
+  });
+  await queue.work('sales.draft', async (data) => {
+    const outcome = await draftProposal(deps, data.callId);
+    deps.log.info('proposal draft', { callId: data.callId, outcome });
+  });
+  await queue.work('sales.post', async (data) => {
+    const outcome = await postSales(deps, data.callId);
+    deps.log.info('sales post', { callId: data.callId, outcome });
+  });
 
   await queue.onDeadLetter(async (dead) => {
     deps.log.error('job dead-lettered', { queue: dead.queue, jobId: dead.jobId, error: dead.error });

@@ -60,6 +60,8 @@ const QUEUE_OVERRIDES: Partial<Record<JobName, { retryLimit?: number; expireInSe
   'calls.analyze': { expireInSeconds: 900 },
   // Up to five briefs after the suggestions themselves.
   'calls.suggest': { expireInSeconds: 1800 },
+  // Three model calls, the middle one on the top tier.
+  'sales.draft': { expireInSeconds: 1800 },
 };
 
 function errorText(output: unknown): string {
