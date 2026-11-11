@@ -1,0 +1,76 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+main {
+  max-width: 62rem;
+  margin: 1.5rem auto;
+  padding: 0 1rem;
+}
+
+h1 small {
+  font-weight: 400;
+  font-size: 0.9rem;
+  opacity: 0.7;
+}
+
+section {
+  border: 1px solid #8884;
+  border-radius: 10px;
+  padding: 0.5rem 1rem 1rem;
+  margin: 1rem 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid #8883;
+}
+
+label {
+  display: block;
+  margin: 0.4rem 0;
+}
+
+label.check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+input[type='url'],
+input[type='password'] {
+  width: 26rem;
+  max-width: 100%;
+  padding: 0.3rem 0.4rem;
+}
+
+button {
+  padding: 0.35rem 0.8rem;
+}
+
+.muted {
+  opacity: 0.72;
+}
+
+.bad {
+  color: #b3261e;
+}
+
+.good {
+  color: #1a7f45;
+}
+
+code {
+  font-family: ui-monospace, monospace;
+}

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Patcher Slack companion</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Patcher Slack companion <small id="version"></small></h1>
+      <p class="muted">
+        Listens to the messages Slack's web client receives in this Chrome profile and sends the ones you have switched on to your own Patcher. It only reads: it never posts,
+        reacts or marks anything read, makes no request to Slack, and never reads or sends a cookie or a token.
+      </p>
+
+      <section id="pairing">
+        <h2>Pairing</h2>
+        <div id="paired" hidden>
+          <p>Paired with <code id="paired-url"></code>. <span id="paired-state"></span></p>
+          <p id="paired-error" class="bad" hidden></p>
+          <button id="unpair" type="button">Unpair</button>
+        </div>
+        <form id="pair" hidden>
+          <label>Patcher address <input id="base-url" type="url" placeholder="https://patcher.example.com" required /></label>
+          <label>Device key <input id="key" type="password" placeholder="pdk_…" autocomplete="off" required /></label>
+          <button type="submit">Pair</button>
+          <p id="pair-error" class="bad" hidden></p>
+          <p class="muted">
+            Both are shown once in Patcher, on the Slack inbox screen, under "Pair a reader". Not paired, the extension still counts what it hears, so the readout below works; it sends
+            nothing anywhere.
+          </p>
+        </form>
+      </section>
+
+      <section>
+        <h2>Slack tabs in this profile</h2>
+        <p><button id="tick" type="button">Check now</button> <span id="checked" class="muted"></span></p>
+        <table>
+          <thead>
+            <tr><th>Tab</th><th>State</th><th>Sockets</th><th>Frames</th><th>Messages</th><th>Sent to Patcher</th><th>Notes</th></tr>
+          </thead>
+          <tbody id="tabs"></tbody>
+        </table>
+        <p id="no-tabs" class="muted" hidden>No tab on app.slack.com. Open your workspace at https://app.slack.com/client in this profile.</p>
+        <h3>Workspaces</h3>
+        <table>
+          <thead><tr><th>Workspace</th><th>State</th><th>In Patcher</th></tr></thead>
+          <tbody id="workspaces"></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Readout for the spike</h2>
+        <p class="muted">Counts and times only, kept in this profile for two days. No message text is kept here.</p>
+        <p id="ran"></p>
+        <h3>Minutes without a report</h3>
+        <ul id="gaps"></ul>
+        <h3>By workspace</h3>
+        <table>
+          <thead><tr><th>Workspace</th><th>Open</th><th>Not answering</th><th>Signed out</th><th>No tab</th><th>Messages heard</th><th>Sent</th><th>Signed out, times</th></tr></thead>
+          <tbody id="teams"></tbody>
+        </table>
+        <h3>Changes</h3>
+        <ul id="events"></ul>
+        <h3>What arrives on the sockets</h3>
+        <p class="muted">Frame types by name, per tab, since the tab was loaded. "message" is what the extension captures.</p>
+        <div id="types"></div>
+        <p id="worker" class="muted"></p>
+        <p>
+          <button id="copy" type="button">Copy the readout</button>
+          <button id="clear" type="button">Clear the log</button>
+          <span id="copied" class="muted"></span>
+        </p>
+      </section>
+
+      <section>
+        <h2>See what was heard</h2>
+        <label class="check"><input id="preview" type="checkbox" /> Show the start of the last messages each tab heard, on this page only</label>
+        <p class="muted">
+          For checking capture during the spike. The text stays in the tab's memory, is never stored or sent, and is forgotten when this is switched off or the tab is reloaded.
+        </p>
+        <table id="preview-table" hidden>
+          <thead><tr><th>When</th><th>Workspace</th><th>Channel</th><th>From</th><th>Kind</th><th>Starts with</th></tr></thead>
+          <tbody id="previews"></tbody>
+        </table>
+      </section>
+    </main>
+    <script src="lib.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>
