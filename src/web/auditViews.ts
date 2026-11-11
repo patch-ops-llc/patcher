@@ -151,17 +151,19 @@ export function auditsPage(
 function reportFindingItem(f: ReportFinding): SafeHtml {
   const tail = history(f);
   const fix = fixText(f.fix);
-  return html`<li>
-    ${severityBadge(f.severity)}
-    <a href="/audits/findings/${f.id}"><strong>${f.subject}</strong> ${f.title}</a>
-    ${tail ? html`<span class="muted">· ${tail}</span>` : ''}
-    <div class="muted small">
-      ${f.recommendation}
-      ${fix
-        ? f.fix.recommendationId
-          ? html` · <a href="/approvals/${f.fix.recommendationId}">${fix}</a>`
-          : ` · ${fix}`
-        : ''}
+  return html`<li class="finding">
+    <div>${severityBadge(f.severity)}</div>
+    <div>
+      <a href="/audits/findings/${f.id}"><strong>${f.subject}</strong> ${f.title}</a>
+      ${tail ? html`<span class="muted">· ${tail}</span>` : ''}
+      <div class="muted small">
+        ${f.recommendation}
+        ${fix
+          ? f.fix.recommendationId
+            ? html` · <a href="/approvals/${f.fix.recommendationId}">${fix}</a>`
+            : ` · ${fix}`
+          : ''}
+      </div>
     </div>
   </li>`;
 }
@@ -312,8 +314,8 @@ export function findingPage(
           ? html`<ul class="list">
               ${data.agents.map(
                 (a) =>
-                  html`<li>${safeUrl(a.agentUrl) ? html`<a href="${a.agentUrl}" rel="noreferrer">Agent</a>` : 'Agent'} on
-                    <code>${a.repo}</code>: ${a.status.replace('_', ' ')}${a.lastError ? `. ${a.lastError}` : ''}
+                  html`<li><span>${safeUrl(a.agentUrl) ? html`<a href="${a.agentUrl}" rel="noreferrer">Agent</a>` : 'Agent'} on
+                    <code>${a.repo}</code>: ${a.status.replace('_', ' ')}${a.lastError ? `. ${a.lastError}` : ''}</span>
                     <span class="muted">${when(a.startedAt)}</span></li>`,
               )}
             </ul>`
