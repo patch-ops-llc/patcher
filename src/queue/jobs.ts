@@ -59,6 +59,20 @@ export const jobSchemas = {
   'sales.draft': z.strictObject({ callId: id }),
   /** Post or update the one Slack message for a sales call, and offer its proposal for approval. */
   'sales.post': z.strictObject({ callId: id }),
+  /** Read a settled bundle of Slack messages: triage, then the recommendation. */
+  'inbox.bundle': z.strictObject({ bundleId: id }),
+  /** Post or update the message of one Slack item that does not wait for the digest. */
+  'inbox.post': z.strictObject({ bundleId: id }),
+  /** Post or update one digest. */
+  'inbox.digest.post': z.strictObject({ digestId: id }),
+  /** Look again at the open items of one conversation: the reader answered, or a message was deleted. */
+  'inbox.recheck': z.strictObject({ workspaceId: id, channelKey: z.string().min(1).max(300) }),
+  /** Read channel history for a window the events did not cover. */
+  'inbox.backfill': z.strictObject({ backfillId: id }),
+  /** Check a newly connected reader's token and learn the workspace's address. */
+  'inbox.workspace.check': z.strictObject({ workspaceId: id }),
+  /** A workspace was switched off: revoke and forget its token. */
+  'inbox.workspace.off': z.strictObject({ workspaceId: id, requestedBy: z.string() }),
   /** After a resume: pick up what waited while paused. */
   'system.resume': z.strictObject({ requestedBy: z.string() }),
 } as const;

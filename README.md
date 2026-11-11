@@ -4,7 +4,7 @@ The PatchOps operations bot. It watches PatchOps' work, posts short recommendati
 PatchOps Slack workspace, and acts only after a person on the approver list approves the
 exact action shown.
 
-This repository holds four phases:
+This repository holds five phases:
 
 - **Phase 0, the foundation**: the two services, the database, the job queue and scheduler,
   the Slack hub app, the control UI, settings, the audit log, the pause switch, and the
@@ -22,6 +22,11 @@ This repository holds four phases:
   it was; a sales call gets a proposal draft, offered in Slack to approve, edit or dismiss;
   a Penguin deal that already has a room gets, on approval, a pull request with the
   proposal as the room's content files. Nothing here merges it.
+- **Phase 4a, the Slack reader**: new messages in PatchOps that the owner can see, read
+  through the hub app with his own read-only authorisation, and notification mail from
+  other workspaces, forwarded. A code filter, then a model that sorts each conversation
+  and words one recommendation with the message's own words as evidence. What is urgent is
+  posted as one short message; the rest is a digest. Nothing is posted as the owner.
 
 - Setting it up: [`docs/setup-checklist.md`](docs/setup-checklist.md)
 - Slack app: [`slack/manifest.yaml`](slack/manifest.yaml)
@@ -299,6 +304,86 @@ next phase. It is a second `DealRoomAdapter` (`src/dealroom/adapter.ts`), chosen
 `src/worker.ts` builds `integrations.dealRoom`; `deal_room_updates.route` and
 `deals.deal_room_ref` are already there for it.
 
+## The Slack reader
+
+```
+PatchOps message events ─┐
+forwarded Slack mail ────┼─▶ receiveCaptured (src/inbox/capture.ts)
+(phase 4b: companion) ───┘        │ code: filter ▸ dedupe ▸ store ▸ bundle by thread or channel
+                                  ▼ after the settle window (3 minutes)
+                    inbox.bundle  names and thread context ▸ did he already reply?
+                                  model (small): none | fyi | reply | task | escalate, urgency,
+                                                 addressed to him, project, the words behind it
+                                  model (mid):   one-line summary, the suggestion, a draft reply
+                                  code:          the quote must be in the messages; recheck
+                                  ▼
+            one recommendation ─▶ urgent: its own message      otherwise: a line in the digest
+                                  [Copy draft] [Open in Slack] [Task only] [Dismiss]
+```
+
+- **The seam** (`src/inbox/capture.ts`). Every source ends in `receiveCaptured` with one
+  shape, `CapturedMessage`: workspace, source, channel, sender, text, time, and Slack's
+  timestamp and link where the source knows them. A source authenticates its sender and
+  finds the workspace; from the seam on nothing depends on where a message came from. The
+  browser companion of phase 4b is a third caller: its sources (`companion_page`,
+  `companion_notification`) and read mode are already in the schema, and it needs an
+  endpoint with device keys in front of the same function.
+- **PatchOps through the app** (`src/inbox/slackEvents.ts`, `src/inbox/reader.ts`). An owner
+  grants the hub app ten read-only user scopes from **Slack inbox → Connect PatchOps**.
+  `web` exchanges the code, checks the workspace, the person and the scopes, and stores the
+  token sealed with the public key; it cannot open it again. Message events arrive on
+  `/slack/events`, are verified like every Slack request, and go through the seam before
+  the request is answered, so Slack retries a message that was not stored. They are not
+  kept in `webhook_events`. The worker opens the token to look up names, read a thread's
+  earlier messages, and catch up after a gap (`inbox.backfill`, at most 72 hours).
+- **Forwarded mail** (`src/inbox/email.ts`). `POST /ingest/email` takes Postmark's inbound
+  JSON. Two checks: the service's password (HTTP Basic), and a secret part in the address
+  the mail was delivered to, of which only a hash is stored. Mail must have Slack as its
+  sender. The workspace is read from the links in the mail; one that is not listed is
+  added switched off and its mail is not read until a person switches it on. Only the
+  outcome, the sender and, for a week, the subject of a mail that was not from Slack are
+  logged.
+- **The filter**, in code, before anything is stored: system messages, bots, Patcher's own
+  channels, channels left out by a rule, direct messages where they are switched off,
+  messages with no text. Each drop is counted by reason and day and nothing else is kept.
+  The owner's own messages are stored without their text, to know that he replied.
+- **Bundles.** Messages of one thread, or of one channel within the settle window, are read
+  together. A message that arrives while a model is reading opens the next bundle.
+- **The two model steps** (`src/inbox/triage.ts`, `src/inbox/recommend.ts`, prompts
+  `slack-triage` and `slack-recommend`). Both go through `callModel`: redacted input, a
+  validated tool call, one repair, a recorded cost. A reading is kept only when its quote
+  is found in the bundle's messages; one that is not is asked for once more, and
+  after that the bundle is marked failed, or listed "not analysed" when it was addressed
+  to the owner. A project is matched only from the list the prompt gave. A draft reply has its
+  links removed.
+- **One workspace per prompt** (`src/inbox/pipeline.ts`). A prompt holds one bundle. For
+  PatchOps the project list is the registry; for any other workspace it is only the
+  projects a person linked to that workspace or one of its channels. The examples of past
+  decisions are Patcher's own summaries from the same workspace.
+- **Recheck.** Before a model call, after it, and before every digest: if the owner has
+  written in that conversation since, the item is closed as handled. This works where his
+  own messages are seen, which is PatchOps; mail cannot show it.
+- **Delivery** (`src/inbox/delivery.ts`). Urgent is the model's `escalate` or `now`, or a
+  channel marked **Always urgent**. A digest-only channel never interrupts; during quiet
+  hours only an escalation or an always-urgent channel does; when the channel has had its
+  posts for the hour the item waits for the digest. The digest is one message: a counted
+  headline, up to four numbered lines with **Open**, and **Show all**. Each item is one
+  recommendation in the shared loop, carried by its own message or by the digest.
+- **What approval can do** (`src/inbox/catalog.ts`). **Task** records a task in Patcher, on
+  the matched project or on none. **Agent** is offered for a code change in a project
+  with exactly one linked repository, and is the audit's `cursor.launch_agent` with a
+  brief composed by rule from Patcher's summary, never from the message's words. **Copy
+  draft** opens the draft to copy; Patcher has no scope that posts as anyone. **Dismiss**
+  asks why in one tap, and three "wrong channel" for one channel offer a rule.
+- **Not available.** With Patcher paused, the model switched off, a budget reached or the
+  provider down, a bundle waits and is picked up by `slack.catchup` every five minutes. A
+  message addressed to the owner does not wait for long: after the time in Settings it is
+  listed "not analysed", with who wrote, where, and a link.
+- **Retention** (`src/inbox/retention.ts`). After 14 days the text, the draft and the
+  quoted words are removed; the link, the IDs and Patcher's summary stay. Edits and
+  deletions in PatchOps are applied to the stored copy. Switching a workspace off deletes
+  what was stored for it and revokes the token at Slack.
+
 ## The audit dry run
 
 A dry run reads the live workspace and writes the findings, ranked by the rules, to a file,
@@ -332,6 +417,9 @@ src/
   db/                               pool, transactions, migration runner
   fix/                              "Fix via agent": the action, its brief, the agent poll
   github/                           read-only GitHub App client
+  inbox/                            the Slack reader: the capture seam, hub message events, the
+                                    reader's token, forwarded mail, the filter and bundles, the two
+                                    model steps, the item message and the digest, retention
   integrations/                     which outside systems are configured, and when they last answered
   probes/                           the HTTP prober and the five-minute probe run
   queue/                            job names and payloads, the pg-boss wrapper
@@ -366,6 +454,8 @@ test/                               vitest, against a real Postgres
 | A transcript source | A `TranscriptSource` in `src/calls/sources/`, added to `integrations.transcripts` in `src/worker.ts` |
 | Something that reads every analysed call | `onCallAnalysed` in `src/calls/seam.ts`. It can run twice for one call, so make it safe to repeat |
 | Another way to reach the deal room | A `DealRoomAdapter` in `src/dealroom/adapter.ts`, chosen in `src/worker.ts` |
+| Another way to capture Slack messages | A caller of `receiveCaptured` in `src/inbox/capture.ts`: authenticate the sender, find the workspace, hand over a `CapturedMessage`. The forwarded-mail route in `src/inbox/email.ts` is the pattern |
+| Another inbound-mail service | An `InboundProvider` in `src/inbox/email.ts`, chosen in `src/web.ts` |
 | A message that carries several recommendations | A carrier in `src/recommendations/carriers.ts`, as the audit report does in `src/weekly/delivery.ts` |
 | An audit check | A `Check` in `src/weekly/checks.ts`, added to `CHECKS` |
 | Something else to read from Railway | A query in `src/railway/queries.ts` (read-only) and a collector in `src/railway/collect.ts` |
@@ -404,6 +494,9 @@ SLACK_API_URL=http://localhost:4010/api/
 SLACK_OIDC_URL=http://localhost:4010
 ```
 
+The fake does not play the reader's authorisation (`oauth.v2.access`) or send message
+events, so the Slack reader is exercised by the tests, not by a local run.
+
 Without `RAILWAY_API_TOKEN`, `CURSOR_API_KEY`, `ANTHROPIC_API_KEY`, the `GITHUB_APP_*` and the
 `DEALROOM_GITHUB_APP_*` variables the worker starts, logs each as not configured, and the **Audits** screen says
 which variables are missing. Connecting a call source also needs the token key pair
@@ -440,7 +533,10 @@ The test run rebuilds the test database from `migrations/` each time.
   level, one line after a decision, detail in a thread or behind a link.
 - Text that came from outside is escaped before it goes into a Slack message or a page.
 - The public service never holds a key that decrypts stored tokens, nor the Railway, Cursor,
-  GitHub, deal room, Anthropic, Calendly or Fathom credentials.
+  GitHub, deal room, Anthropic, Calendly or Fathom credentials. It sees the Slack reader's
+  token once, when Slack hands it over, and stores it sealed.
+- Slack is read with read-only scopes, in PatchOps only, for one person. Nothing is posted
+  as a person. A prompt about one workspace never holds content from another.
 - A model drafts and classifies. It is given redacted text, returns data that is validated,
   and cannot start an action. Nothing is used from output that failed validation.
 - Railway is only read. Variable values are never requested.

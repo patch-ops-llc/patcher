@@ -1,5 +1,7 @@
 import type { FeatureStatus } from '../config.js';
 import type { Pool } from '../db/pool.js';
+import type { InboundProvider } from '../inbox/email.js';
+import type { SlackReaderOAuth } from '../inbox/reader.js';
 import type { Logger } from '../log.js';
 import type { Enqueuer } from '../queue/queue.js';
 import type { Catalog } from '../recommendations/catalog.js';
@@ -30,4 +32,10 @@ export interface WebDeps {
    * `TOKEN_PUBLIC_KEY` is set; a key cannot be added without it.
    */
   seal: ((plaintext: string) => string) | null;
+  /** Null until the Slack app's client id and secret are set; PatchOps cannot be connected for reading without it. */
+  readerOAuth: SlackReaderOAuth | null;
+  /** The password the mail service sends with each forwarded mail. Undefined: the endpoint answers 503. */
+  inboundEmailSecret: string | undefined;
+  /** How the mail service's delivery is read. */
+  inboundMail: InboundProvider;
 }

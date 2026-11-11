@@ -18,6 +18,8 @@ export const PROMPTS = {
   'deal-brief': 'v1',
   'proposal-draft': 'v1',
   'proposal-check': 'v1',
+  'slack-triage': 'v1',
+  'slack-recommend': 'v1',
 } as const;
 
 export type PromptTask = keyof typeof PROMPTS;

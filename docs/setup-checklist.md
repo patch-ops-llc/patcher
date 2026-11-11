@@ -31,8 +31,9 @@ deployment that is already running keeps serving in the meantime.
 
 What is left is for the owner: section 3 (the Slack app and its six variables), section 4
 (first run), section 5 (the weekly audit and its variables), section 6 (call transcripts),
-section 7 (sales calls, proposals and the deal room, with three more variables), and the
-last item of section 8 after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
+section 7 (sales calls, proposals and the deal room, with three more variables), section 8
+(the Slack reader: an update to the Slack app, one authorisation, and one more variable if
+forwarded email is wanted), and the last item of section 9 after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
 is built, should it ever be rebuilt.
 
 ## 1. Railway project
@@ -158,6 +159,16 @@ Without them sales calls are still found and proposals drafted, approved and ren
 PDF. Approving a Penguin deal's proposal then fails with "the deal room GitHub App is not
 configured" and a Retry button; nothing is lost.
 
+### Owner: for the Slack reader (step 8)
+
+| Variable | Service | Where the value comes from |
+| --- | --- | --- |
+| `INBOUND_EMAIL_WEBHOOK_SECRET` | web | A password you make up, 24 characters or more, for example `openssl rand -hex 32`. The inbound-mail service sends it with every delivery (section 8, part D). Needed only for forwarded email |
+
+Reading PatchOps needs no new variable. It uses `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`,
+`SLACK_TEAM_ID` and the token key pair, which are already set. The authorisation it stores
+is granted from the **Slack inbox** screen and kept encrypted in the database.
+
 ### Optional
 
 | Variable | Service | Purpose |
@@ -174,7 +185,7 @@ Calendly and Fathom have no variables. Their keys are typed into **Settings → 
 
 ## 3. Owner: the Slack app
 
-1. Open [`slack/manifest.yaml`](../slack/manifest.yaml). Its four URLs already point at
+1. Open [`slack/manifest.yaml`](../slack/manifest.yaml). Its five URLs already point at
    `https://web-production-944a4680.up.railway.app`; change them only if the web address
    has changed.
 2. Go to <https://api.slack.com/apps> → **Create New App** → **From a manifest** → choose the
@@ -190,17 +201,21 @@ Calendly and Fathom have no variables. Their keys are typed into **Settings → 
 7. Back in the Slack app, open **Event Subscriptions**. If the Request URL shows as
    unverified, click **Retry**; it verifies once the signing secret is set on web.
 
-The URLs the Slack app must contain (the manifest sets all four):
+The URLs the Slack app must contain (the manifest sets all five):
 
 | Where in the Slack app | URL |
 | --- | --- |
 | OAuth & Permissions → Redirect URLs | `https://web-production-944a4680.up.railway.app/auth/slack/callback` |
+| OAuth & Permissions → Redirect URLs | `https://web-production-944a4680.up.railway.app/auth/slack/reader/callback` (the Slack reader, section 8) |
 | Event Subscriptions → Request URL | `https://web-production-944a4680.up.railway.app/slack/events` |
 | Interactivity & Shortcuts → Request URL | `https://web-production-944a4680.up.railway.app/slack/interactions` |
 | Slash Commands → `/ops` → Request URL | `https://web-production-944a4680.up.railway.app/slack/commands` |
 
-If the web address changes later (a custom domain, for example), change all four and
+If the web address changes later (a custom domain, for example), change all five and
 `APP_BASE_URL`.
+
+If the app was created from the manifest before the Slack reader was added, it lacks the
+second redirect URL, the user scopes and the message events. Section 8, part A, adds them.
 
 ## 4. Owner: first run
 
@@ -463,7 +478,145 @@ Things to know:
 - A proposal that expires without a decision is not lost: **Regenerate** or **Review**
   on the message, or the deal's page, offers it again.
 
-## 8. Later, not needed for the foundation
+## 8. Owner: the Slack reader
+
+Patcher reads new messages in PatchOps that you can see, sorts them, and posts what needs
+you in the Slack inbox channel: something urgent as its own short message, the rest as a
+digest. For other workspaces it reads the notification mail Slack sends you, once you
+forward it. It posts nothing as you and holds no permission that could.
+
+Parts A to C are for PatchOps. Part D, forwarded email, is separate and optional. Sections
+3 and 4 come first, and `ANTHROPIC_API_KEY` on `worker` (section 5): without it messages
+are collected, only the ones addressed to you are listed, and they are marked "not
+analysed".
+
+### A. Update the Slack app
+
+The reader added to [`slack/manifest.yaml`](../slack/manifest.yaml): a second redirect URL,
+ten read-only user scopes, four message events delivered for the person who grants them,
+and the `tokens_revoked` event. The bot's own scopes did not change.
+
+1. <https://api.slack.com/apps> → **Patcher** → **App Manifest**. Replace the manifest with
+   the file's contents and **Save Changes**. If you would rather not replace it, make the
+   same changes by hand:
+
+   | Where in the Slack app | Add |
+   | --- | --- |
+   | OAuth & Permissions → Redirect URLs | `https://web-production-944a4680.up.railway.app/auth/slack/reader/callback` |
+   | OAuth & Permissions → User Token Scopes | `channels:history`, `groups:history`, `mpim:history`, `im:history`, `channels:read`, `groups:read`, `mpim:read`, `im:read`, `users:read`, `team:read` |
+   | Event Subscriptions → Subscribe to events on behalf of users | `message.channels`, `message.groups`, `message.mpim`, `message.im` |
+   | Event Subscriptions → Subscribe to bot events | `tokens_revoked` |
+
+2. If Slack then shows a banner asking you to reinstall the app, reinstall it to PatchOps.
+   Afterwards compare **OAuth & Permissions → Bot User OAuth Token** with what you set
+   before; if it changed, update `SLACK_BOT_TOKEN` on both services.
+3. **Event Subscriptions** should still show the Request URL as verified.
+
+None of the user scopes can post, edit, delete, join a channel or change a setting.
+`chat:write` for a user is deliberately not there: "Send reply" is a later phase.
+
+### B. Channel
+
+Create or choose the channel (the design suggests `#ops-inbox`), `/invite @Patcher`, and
+choose it for **Slack inbox** in **Settings → Slack routing**. Patcher never reads the
+channels it posts to, whatever else is switched on.
+
+### C. Switch on and connect
+
+1. **Settings → Slack inbox**: tick **Read Slack messages** and save. It is off until you
+   do; while it is off every message event is acknowledged and dropped, and nothing is
+   stored. The same card has the quiet hours and their time zone, the settle time, the
+   retention, the two models and the budgets (5 US dollars a day and 60 a month to begin
+   with).
+2. **Slack inbox → Connect PatchOps**. You must be signed in to Patcher as an owner, and
+   it is your own messages that will be read: Slack shows its consent screen with the read
+   permissions; allow it. Patcher refuses, and hands back, an authorisation that is for
+   another workspace, for a different person than the one signed in, or without
+   permission to read messages.
+3. The workspace shows as **Connected**. Messages from that moment on are read. Nothing
+   from before is read unless you ask: **Catch up** reads up to the last 72 hours.
+4. Milestone check: have a teammate send you a direct message with a question. After the
+   settle time (3 minutes) it appears in the Slack inbox channel, or on **Slack inbox →
+   Post a digest now**. The digest also posts by itself at 9:00, 13:00 and 17:00 on
+   weekdays, Chicago time (**Settings → Schedules**, `slack.digest`).
+
+On the **Slack inbox** screen, per workspace: on or off, whether direct messages are read,
+whether channels without a rule are read or left out, and a project. Channel rules are
+**Read**, **Leave out**, **Digest only** and **Always urgent**, by channel ID or name.
+Switching a workspace off deletes the messages stored for it, closes its open items and
+hands the authorisation back to Slack; reading it again means **Connect** again.
+
+### D. Forwarded email, for other workspaces
+
+Slack mails you about direct messages and mentions you have not seen. A rule in your
+mailbox forwards those mails to a private address at an inbound-mail service, and the
+service posts them to Patcher. Nothing is installed in the other workspace. Patcher is
+written for Postmark's inbound webhook; another service needs a small adapter.
+
+1. **Mail service.** In Postmark, create a server and open its **Inbound** stream. Note
+   the stream's inbound address (`…@inbound.postmarkapp.com`).
+2. **Password.** Make one up (`openssl rand -hex 32`) and set it as
+   `INBOUND_EMAIL_WEBHOOK_SECRET` on `web`. In the inbound stream's settings, set the
+   webhook URL to
+   `https://patcher:<that password>@web-production-944a4680.up.railway.app/ingest/email`.
+   The user name can be anything. `/health` then shows `features.inboundEmail: true`.
+3. **Settings → Slack inbox**: paste the stream's inbound address into **Inbound address
+   of the mail service** and save.
+4. **Slack inbox → Forwarded email → Issue a forwarding address.** The address is shown
+   once: it is the inbound address with a secret part after a `+`. Copy it. Patcher keeps
+   only a hash of the secret part; issuing another withdraws this one.
+5. **Mail rule.** In the mailbox that receives Slack's notification mail, forward mail
+   from `@slack.com` to that address, automatically. It has to be a rule: a mail you
+   forward by hand names you as the sender and is not read. If your mail provider first
+   sends a confirmation to the new address (Gmail does), its subject is listed under
+   **Forwarded email** on the Slack inbox screen for a week, marked "Not from Slack, not
+   read"; the body is not kept, so use a code from the subject, not a link.
+6. **In each other workspace**: **Preferences → Notifications**, and turn on email
+   notifications for when you are not active.
+7. The first mail about a workspace adds it to the **Slack inbox** screen, switched off.
+   Switch it on there; mail about it is read from then on. You can also add it ahead of
+   time by its address (`acme.slack.com`).
+
+What email can and cannot do: it carries direct messages and mentions only, in batches,
+some minutes late, without the thread around them, and it cannot show that you have
+replied since. Mail about a workspace that is read through the app is ignored, so
+PatchOps is not read twice.
+
+### What is sent where
+
+- **To Anthropic**, per conversation that passed the filter: its messages after redaction,
+  with the thread before them where the app can read it; display names, the channel name
+  and the workspace name; the names of the projects that workspace may be matched to; and
+  Patcher's own one-line summaries of recent items from the same workspace with how each
+  was decided. Content from one workspace is never in a prompt about another. Never a
+  token.
+- **To Slack (PatchOps)**: Patcher's one-line summary, the suggestion, and who wrote where.
+  The draft reply is shown in a dialog to the person who opens it, to copy; Patcher sends
+  nothing. The words quoted as
+  evidence are posted only when someone asks for **Details**.
+- **Kept**: message text for 14 days (**Settings → Slack inbox**), then removed along with
+  the draft and the quoted words; the link, the IDs and Patcher's summary stay. An edit or
+  a deletion in PatchOps is applied to the stored copy. No search index is built.
+
+Things to know:
+
+- Joins and other system messages, bots and channels left out by a rule are dropped by
+  code before anything is stored. The **Slack inbox** screen counts what was dropped and
+  why, per day; it does not keep the messages. Of your own messages only the time and
+  place are kept, without the text, so that Patcher knows you have replied.
+- Each item offers **Task** (a task in Patcher, on the matched project or on none),
+  **Agent** when the message asks for a code change in a project with exactly one linked
+  repository (the same Cursor flow as a call suggestion, behind the same approval), **Copy
+  draft** with **Open in Slack**, and **Dismiss**, which asks why in one tap.
+- An item is closed by itself when you reply in that conversation before deciding.
+- During quiet hours only an escalation, or a channel marked **Always urgent**, is posted
+  at once. Everything else waits for the digest.
+- Pause and **Dry run** apply here too.
+- If Slack stops accepting the authorisation, reading stops, the errors channel says so
+  once, and the screen offers **Connect** again. A reconnect catches up from the last
+  event Slack delivered, up to 72 hours back.
+
+## 9. Later, not needed for the foundation
 
 - An external uptime monitor on `https://<web address>/health` (design section 13.1).
 - Railway: restrict who can view the project's variables; turn on two-factor

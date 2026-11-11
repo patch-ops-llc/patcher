@@ -29,6 +29,7 @@ const NAV = [
   { href: '/audits', label: 'Audits' },
   { href: '/calls', label: 'Calls' },
   { href: '/sales', label: 'Sales' },
+  { href: '/inbox', label: 'Slack inbox' },
   { href: '/projects', label: 'Projects' },
   { href: '/settings', label: 'Settings' },
   { href: '/activity', label: 'Activity' },
@@ -417,6 +418,8 @@ export function settingsPage(
     callsCard: SafeHtml;
     /** The Sales card, built by the sales screens. */
     salesCard: SafeHtml;
+    /** The Slack inbox card, built by the inbox screens. */
+    inboxCard: SafeHtml;
   },
 ): string {
   const owner = hasRole(ctx.session.user, 'owner');
@@ -552,6 +555,8 @@ export function settingsPage(
 
       ${data.salesCard}
 
+      ${data.inboxCard}
+
       <section class="card" id="schedules">
         <h2>Schedules</h2>
         <p class="muted">Cron expression and time zone. A change takes effect within a minute.</p>
@@ -631,7 +636,7 @@ function targetPath(action: string): string | null {
   if (action.startsWith('call.') || action === 'sales.post') return '/calls';
   if (action.startsWith('proposal.')) return '/sales/proposals';
   if (action.startsWith('deal.')) return '/sales/deals';
-  if (action.startsWith('dealroom.') || action.startsWith('sales.')) return null;
+  if (action.startsWith('dealroom.') || action.startsWith('sales.') || action.startsWith('inbox.')) return null;
   if (action.startsWith('finding.')) return '/audits/findings';
   if (action.startsWith('audit.')) return '/audits';
   if (action.startsWith('project.')) return '/projects';

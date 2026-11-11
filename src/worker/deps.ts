@@ -8,6 +8,7 @@ import type { FeatureStatus } from '../config.js';
 import type { CursorClient } from '../cursor/client.js';
 import type { DealRoomAdapter } from '../dealroom/adapter.js';
 import type { GitHubClient } from '../github/client.js';
+import type { SlackReaderFactory } from '../inbox/reader.js';
 import type { TranscriptSource } from '../calls/sources/source.js';
 import type { Vendor } from '../calls/types.js';
 import type { Prober } from '../probes/probe.js';
@@ -36,6 +37,11 @@ export interface Integrations {
    * request. The app's service API (phase 3b) is a second adapter behind the same interface.
    */
   dealRoom: DealRoomAdapter | null;
+  /**
+   * Reads the hub workspace as the person who authorised it. It holds no token: each call is
+   * given the token of the workspace it is for, opened from the database. Read methods only.
+   */
+  slackReader: SlackReaderFactory;
   status: { railway: FeatureStatus; github: FeatureStatus; cursor: FeatureStatus; anthropic: FeatureStatus; dealroom: FeatureStatus };
 }
 

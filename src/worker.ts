@@ -12,6 +12,9 @@ import { createRepoAdapter } from './dealroom/adapter.js';
 import { createDealRoomRepo } from './dealroom/github.js';
 import { registerFixCatalog } from './fix/agentFix.js';
 import { createGitHubClient, parseGitHubPrivateKey } from './github/client.js';
+import { registerInboxCatalog } from './inbox/catalog.js';
+import { inboxCarrier } from './inbox/delivery.js';
+import { createSlackReader } from './inbox/reader.js';
 import { recordConfigured } from './integrations/status.js';
 import { createLogger } from './log.js';
 import { createProber } from './probes/probe.js';
@@ -90,6 +93,8 @@ async function main(): Promise<void> {
     dealRoom: config.dealRoom
       ? createRepoAdapter(createDealRoomRepo({ ...config.dealRoom, ...(config.dealRoomApiUrl ? { baseUrl: config.dealRoomApiUrl } : {}) }))
       : null,
+    // Given the reader's token per call. It has read methods only, and `auth.revoke`.
+    slackReader: (token) => createSlackReader({ token, apiUrl: config.slackApiUrl }),
     status: {
       railway: config.features.railway,
       github: config.features.github,
@@ -103,11 +108,14 @@ async function main(): Promise<void> {
   const deps: WorkerDeps = {
     pool,
     queue,
-    catalog: registerSalesCatalog(
-      registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool }),
-      { pool, appBaseUrl: config.appBaseUrl, dealRoom: integrations.dealRoom },
+    catalog: registerInboxCatalog(
+      registerSalesCatalog(
+        registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool }),
+        { pool, appBaseUrl: config.appBaseUrl, dealRoom: integrations.dealRoom },
+      ),
+      { pool },
     ),
-    carriers: new Carriers().register(auditCarrier).register(callCarrier).register(salesCarrier),
+    carriers: new Carriers().register(auditCarrier).register(callCarrier).register(salesCarrier).register(inboxCarrier),
     integrations,
     secrets,
     slack: config.slackBotToken

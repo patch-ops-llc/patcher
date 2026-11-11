@@ -3,6 +3,10 @@ import { handleWebhook, pollAll, pollConnection, removeConnection, setupConnecti
 import { postCall, postCallDetails, resumeHeldCallPosts } from '../calls/delivery.js';
 import { purgeTranscripts } from '../calls/ingest.js';
 import { pollAgentRun } from '../fix/agentFix.js';
+import { postDigest, postItem, resumeHeldInboxPosts, runDigest } from '../inbox/delivery.js';
+import { processBundle, recheckChannel, sweepBundles } from '../inbox/pipeline.js';
+import { purgeInbox } from '../inbox/retention.js';
+import { checkWorkspace, handleTokensRevoked, runBackfill, workspaceOff } from '../inbox/workspace.js';
 import { runProbes } from '../probes/run.js';
 import { postSales, resumeHeldSalesPosts } from '../sales/delivery.js';
 import { syncDealRoom } from '../sales/dealroomSync.js';
@@ -45,7 +49,10 @@ export const scheduleHandlers: Record<string, ScheduleHandler> = {
     const polled = await pollAll(deps);
     return resumed ? `${polled} ${resumed} waiting ${resumed === 1 ? 'call' : 'calls'} picked up again.` : polled;
   },
-  'retention.purge': (deps) => purgeTranscripts(deps.pool),
+  'retention.purge': async (deps) => `${await purgeTranscripts(deps.pool)}, ${await purgeInbox(deps.pool)}`,
+  'slack.digest': (deps) => runDigest(deps, 'schedule'),
+  // Bundles that waited for the model, or whose job was lost, are put back on the queue.
+  'slack.catchup': (deps) => sweepBundles(deps),
   // Reads the state of the deal room pull requests Patcher opened. It never changes one.
   'dealroom.sync': (deps) => syncDealRoom(deps),
 };
@@ -83,7 +90,7 @@ export async function runSchedule(
 }
 
 /** Slack event type to handler, for events `web` stored and enqueued. */
-type SlackEventHandler = (deps: WorkerDeps, event: Record<string, unknown>) => Promise<void>;
+type SlackEventHandler = (deps: WorkerDeps, event: Record<string, unknown>, envelope: { teamId: string | undefined }) => Promise<void>;
 
 export const slackEventHandlers: Record<string, SlackEventHandler> = {
   app_home_opened: async (deps, event) => {
@@ -99,10 +106,12 @@ export const slackEventHandlers: Record<string, SlackEventHandler> = {
         };
     await deps.slack.publishHome({ userId: event.user, view });
   },
+  // The person whose messages are read took the authorisation away, or an admin did.
+  tokens_revoked: (deps, event, envelope) => handleTokensRevoked(deps, envelope.teamId, event),
 };
 
 export async function handleSlackEvent(deps: WorkerDeps, webhookEventId: string): Promise<void> {
-  const { rows } = await deps.pool.query<{ payload: { event?: Record<string, unknown> }; processed_at: Date | null }>(
+  const { rows } = await deps.pool.query<{ payload: { event?: Record<string, unknown>; team_id?: unknown }; processed_at: Date | null }>(
     'SELECT payload, processed_at FROM webhook_events WHERE id = $1',
     [webhookEventId],
   );
@@ -113,7 +122,7 @@ export async function handleSlackEvent(deps: WorkerDeps, webhookEventId: string)
   const handler = type ? slackEventHandlers[type] : undefined;
   if (event && handler) {
     try {
-      await handler(deps, event);
+      await handler(deps, event, { teamId: typeof row.payload.team_id === 'string' ? row.payload.team_id : undefined });
     } catch (err) {
       if (!(err instanceof SlackApiError) || err.retryable) throw err;
       deps.log.warn('slack event handler could not reach slack', { type, code: err.code });
@@ -128,6 +137,17 @@ async function permanentSlackFailureIsFinal(deps: WorkerDeps, what: string, fn: 
   } catch (err) {
     if (!(err instanceof SlackApiError) || err.retryable) throw err;
     deps.log.warn(`${what} could not reach slack`, { code: err.code });
+  }
+}
+
+/** As above, for a step that returns something. Null when Slack refused for good. */
+async function permanentSlackFailure<T>(deps: WorkerDeps, what: string, fn: () => Promise<T>): Promise<T | null> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!(err instanceof SlackApiError) || err.retryable) throw err;
+    deps.log.warn(`${what} could not reach slack`, { code: err.code });
+    return null;
   }
 }
 
@@ -165,7 +185,9 @@ export async function registerHandlers(queue: JobQueue, deps: WorkerDeps): Promi
     const calls = await resumeWaitingCalls(deps);
     const salesPosts = await resumeHeldSalesPosts(deps);
     const sales = await resumeWaitingSales(deps);
-    deps.log.info('resumed held work', { ...resumed, auditReports: reports, callPosts, calls, salesPosts, sales });
+    const inboxPosts = await resumeHeldInboxPosts(deps);
+    const inbox = await sweepBundles(deps);
+    deps.log.info('resumed held work', { ...resumed, auditReports: reports, callPosts, calls, salesPosts, sales, inboxPosts, inbox });
   });
   await queue.work('audit.run', async (data) => {
     const started = new Date();
@@ -242,6 +264,32 @@ export async function registerHandlers(queue: JobQueue, deps: WorkerDeps): Promi
     const outcome = await postSales(deps, data.callId);
     deps.log.info('sales post', { callId: data.callId, outcome });
   });
+
+  await queue.work('inbox.bundle', async (data) => {
+    const outcome = await processBundle(deps, data.bundleId);
+    deps.log.info('slack bundle', { bundleId: data.bundleId, outcome });
+  });
+  await queue.work('inbox.post', async (data) => {
+    const outcome = await postItem(deps, data.bundleId);
+    deps.log.info('slack item post', { bundleId: data.bundleId, outcome });
+  });
+  await queue.work('inbox.digest.post', async (data) => {
+    const outcome = await postDigest(deps, data.digestId);
+    deps.log.info('slack digest post', { digestId: data.digestId, outcome });
+  });
+  await queue.work('inbox.recheck', async (data) => {
+    const closed = await permanentSlackFailure(deps, 'slack item', () => recheckChannel(deps, data.workspaceId, data.channelKey));
+    if (closed) deps.log.info('slack items closed', { workspaceId: data.workspaceId, closed });
+  });
+  await queue.work('inbox.backfill', async (data) => {
+    const outcome = await runBackfill(deps, data.backfillId);
+    deps.log.info('slack catch-up', { backfillId: data.backfillId, outcome });
+  });
+  await queue.work('inbox.workspace.check', async (data) => {
+    const outcome = await checkWorkspace(deps, data.workspaceId);
+    deps.log.info('slack workspace check', { workspaceId: data.workspaceId, outcome });
+  });
+  await queue.work('inbox.workspace.off', (data) => workspaceOff(deps, data.workspaceId, data.requestedBy));
 
   await queue.onDeadLetter(async (dead) => {
     deps.log.error('job dead-lettered', { queue: dead.queue, jobId: dead.jobId, error: dead.error });

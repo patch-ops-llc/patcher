@@ -1,6 +1,8 @@
 import express from 'express';
 import type { Request, Response, Router } from 'express';
 import { handleCallAction, handleCallModal } from '../calls/slack.js';
+import { handleInboxAction, handleInboxModal } from '../inbox/slack.js';
+import { receiveSlackMessageEvent } from '../inbox/slackEvents.js';
 import { withTx } from '../db/pool.js';
 import { queueStats } from '../queue/queue.js';
 import { decide, editRecommendation, getRecommendation, listRecommendations, retryRecommendation } from '../recommendations/service.js';
@@ -76,6 +78,14 @@ export function slackRouter(deps: WebDeps): Router {
       res.status(200).end();
       return;
     }
+    // A message is read here and now, and the event is not stored: what the filter leaves out
+    // is never written down. A failure answers 500, and Slack delivers the event again.
+    if (asObject(body.event)?.type === 'message') {
+      const outcome = await receiveSlackMessageEvent(deps, { teamId: deps.hubTeamId as string, body });
+      log.debug('slack message event', { outcome });
+      res.status(200).end();
+      return;
+    }
     // Slack retries deliveries; the unique event id makes a retry a no-op.
     await withTx(deps.pool, async (tx) => {
       const inserted = await tx.query<{ id: string }>(
@@ -128,7 +138,7 @@ export function slackRouter(deps: WebDeps): Router {
         ? { actor, actionId, value: action?.value, triggerId: asString(payload.trigger_id), tell: (text: string) => tellPrivately(responseUrl, text) }
         : null;
       // So has a sales call's. Its Approve and Retry are the loop's own buttons, handled below.
-      if (click && ((await handleCallAction(deps, click)) || (await handleSalesAction(deps, click)))) {
+      if (click && ((await handleCallAction(deps, click)) || (await handleSalesAction(deps, click)) || (await handleInboxAction(deps, click)))) {
         await touchProfile(deps.pool, actor, { displayName: asString(user?.name) ?? null });
         res.status(200).end();
         return;
@@ -180,6 +190,7 @@ export function slackRouter(deps: WebDeps): Router {
       const view = asObject(payload.view);
       let callModal = view ? await handleCallModal(deps, actor, view) : { handled: false as const };
       if (view && !callModal.handled) callModal = await handleSalesModal(deps, actor, view);
+      if (view && !callModal.handled) callModal = await handleInboxModal(deps, actor, view);
       if (callModal.handled) {
         if (callModal.errors) res.json({ response_action: 'errors', errors: callModal.errors });
         else res.status(200).end();

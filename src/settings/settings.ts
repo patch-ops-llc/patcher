@@ -30,6 +30,27 @@ const emailList = z
   .transform((value) => [...new Set(value.toLowerCase().split(/[\s,;]+/).filter(Boolean))].join(', '))
   .refine((value) => value.split(', ').filter(Boolean).every((e) => EMAIL.test(e)), 'Write whole addresses like name@example.com, separated by commas.');
 
+const SENDER = /^(?:[^\s@,<>"]+)?@[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+const senderList = z
+  .string()
+  .max(1000)
+  .transform((value) => [...new Set(value.toLowerCase().split(/[\s,;]+/).filter(Boolean))].join(', '))
+  .refine((value) => value.split(', ').filter(Boolean).every((e) => SENDER.test(e)), 'Write addresses like name@example.com or @example.com, separated by commas.');
+
+const quietHours = z
+  .string()
+  .trim()
+  .refine((value) => value === '' || /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/.test(value), 'Write quiet hours as HH:MM-HH:MM, like 19:00-07:00, or leave it empty.');
+
+function isTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** What a proposal looks like until the owner writes their own template (design question 8). */
 export const DEFAULT_PROPOSAL_TEMPLATE = `## Summary
 Two or three sentences: what the prospect wants to achieve and what is proposed.
@@ -238,6 +259,78 @@ export const settingDefs = {
     schema: z.number().min(0).max(100_000),
     default: 0,
     label: 'Most to spend on sales model calls in 30 days, in US dollars (0: no cap)',
+  },
+  'inbox.enabled': {
+    schema: z.boolean(),
+    default: false,
+    label: 'Read Slack messages and recommend what to do about them (off: every message is acknowledged and dropped, and nothing is stored)',
+  },
+  'inbox.settle_seconds': {
+    schema: z.number().int().min(0).max(1800),
+    default: 180,
+    label: 'Seconds to wait after a message, so that the ones that follow it are read together',
+  },
+  'inbox.digest_only': {
+    schema: z.boolean(),
+    default: false,
+    label: 'Post nothing at once: every item waits for the next digest',
+  },
+  'inbox.quiet_hours': {
+    schema: quietHours,
+    default: '19:00-07:00',
+    label: 'Quiet hours, as HH:MM-HH:MM (during them only an escalation is posted at once; empty: none)',
+  },
+  'inbox.quiet_tz': {
+    schema: z.string().trim().min(1).max(60).refine(isTimeZone, 'Unknown time zone. Use a name like America/Chicago.'),
+    default: 'America/Chicago',
+    label: 'Time zone of the quiet hours',
+  },
+  'inbox.unanalysed_after_minutes': {
+    schema: z.number().int().min(1).max(24 * 60),
+    default: 30,
+    label: 'Minutes after which a message addressed to you is listed as "not analysed" when the model cannot be used',
+  },
+  'inbox.retention_days': {
+    schema: z.number().int().min(1).max(30),
+    default: 14,
+    label: 'Days to keep the text of Slack messages',
+  },
+  'inbox.agent_enabled': {
+    schema: z.boolean(),
+    default: true,
+    label: 'Offer "Agent" for a message that asks for a code change in a project with one linked repository',
+  },
+  'inbox.email_address': {
+    schema: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .max(200)
+      .refine((value) => value === '' || (EMAIL.test(value) && !value.includes('+')), 'Write the inbound address of the mail service, like abc123@inbound.example.com, without a "+" part.'),
+    default: '',
+    label: 'Inbound address of the mail service that delivers to Patcher',
+  },
+  'inbox.email_senders': {
+    schema: senderList,
+    default: '@slack.com, @slack-mail.com',
+    label: 'Senders whose mail is read as a Slack notification: whole addresses or @domains, comma separated',
+  },
+  'ai.inbox.enabled': {
+    schema: z.boolean(),
+    default: true,
+    label: 'Use the model for Slack messages (off: messages addressed to you are listed unanalysed, the rest wait)',
+  },
+  'ai.inbox.model_triage': { schema: modelId, default: TIER_MODELS.small, label: 'Model that sorts Slack messages' },
+  'ai.inbox.model_recommend': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that words the recommendation and drafts a reply' },
+  'ai.inbox.daily_budget_usd': {
+    schema: z.number().min(0).max(10_000),
+    default: 5,
+    label: 'Most to spend on Slack model calls in 24 hours, in US dollars (0: no cap)',
+  },
+  'ai.inbox.monthly_budget_usd': {
+    schema: z.number().min(0).max(100_000),
+    default: 60,
+    label: 'Most to spend on Slack model calls in 30 days, in US dollars (0: no cap)',
   },
 } as const;
 

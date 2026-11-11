@@ -3,6 +3,9 @@ import { callCarrier } from '../src/calls/delivery.js';
 import type { Pool } from '../src/db/pool.js';
 import { createPool } from '../src/db/pool.js';
 import { registerFixCatalog } from '../src/fix/agentFix.js';
+import { registerInboxCatalog } from '../src/inbox/catalog.js';
+import { inboxCarrier } from '../src/inbox/delivery.js';
+import { postmarkInbound } from '../src/inbox/email.js';
 import { silentLogger } from '../src/log.js';
 import type { JobData, JobName } from '../src/queue/jobs.js';
 import { jobSchemas } from '../src/queue/jobs.js';
@@ -46,7 +49,9 @@ export async function resetDb(pool: Pool): Promise<void> {
              approvals, actions, webhook_events, runs, audit_log, projects, project_links, project_checks,
              railway_inventory, probe_results, audit_runs, audit_findings, agent_runs, integrations, llm_calls,
              transcript_connections, calls, transcripts, call_analyses, call_suggestions, project_tasks,
-             deals, proposals, sales_calls, sales_catalog, deal_room_updates
+             deals, proposals, sales_calls, sales_catalog, deal_room_updates,
+             slack_workspaces, slack_channel_rules, slack_digests, slack_bundles, slack_messages, triage_feedback,
+             slack_drop_counts, slack_names, slack_backfills, inbound_aliases, inbound_emails
              RESTART IDENTITY CASCADE`);
   await pool.query(`
     INSERT INTO schedules (key, cron_expr, tz) VALUES
@@ -55,7 +60,9 @@ export async function resetDb(pool: Pool): Promise<void> {
       ('probe.health', '*/5 * * * *', 'America/Chicago'),
       ('transcripts.poll', '*/15 * * * *', 'America/Chicago'),
       ('retention.purge', '30 3 * * *', 'America/Chicago'),
-      ('dealroom.sync', '*/30 * * * *', 'America/Chicago')`);
+      ('dealroom.sync', '*/30 * * * *', 'America/Chicago'),
+      ('slack.digest', '0 9,13,17 * * 1-5', 'America/Chicago'),
+      ('slack.catchup', '*/5 * * * *', 'America/Chicago')`);
   await pool.query('DELETE FROM pgboss.job');
 }
 
@@ -192,6 +199,9 @@ export function testIntegrations(overrides: Partial<Integrations> = {}): Integra
     cursor,
     model,
     dealRoom,
+    slackReader: overrides.slackReader ?? (() => {
+      throw new Error('no Slack reader in this test');
+    }),
     probe: overrides.probe ?? (() => Promise.reject(new Error('no prober in this test'))),
     transcripts: overrides.transcripts ?? { calendly: new FakeSource('calendly'), fathom: new FakeSource('fathom') },
     status: overrides.status ?? {
@@ -210,15 +220,19 @@ export function harness(pool: Pool, overrides: Partial<WorkerDeps> = {}): Harnes
   const queue = new RecordingQueue();
   const slack = new FakeSlack();
   const integrations = overrides.integrations ?? testIntegrations();
-  const catalog = registerSalesCatalog(
-    registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool }),
-    { pool, appBaseUrl: BASE_URL, dealRoom: integrations.dealRoom },
+  const catalog = registerInboxCatalog(
+    registerSalesCatalog(registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool }), {
+      pool,
+      appBaseUrl: BASE_URL,
+      dealRoom: integrations.dealRoom,
+    }),
+    { pool },
   );
   const worker: WorkerDeps = {
     pool,
     queue,
     catalog,
-    carriers: new Carriers().register(auditCarrier).register(callCarrier).register(salesCarrier),
+    carriers: new Carriers().register(auditCarrier).register(callCarrier).register(salesCarrier).register(inboxCarrier),
     integrations,
     secrets: null,
     slack,
@@ -248,6 +262,9 @@ export function webDeps(h: Harness, overrides: Partial<WebDeps> = {}): WebDeps &
     modals: h.slack,
     features: { slackRequests: configured, slackModals: configured, signIn: configured },
     seal: null,
+    readerOAuth: null,
+    inboundEmailSecret: undefined,
+    inboundMail: postmarkInbound,
     ...overrides,
   } as WebDeps & { oidc: StubOidc };
 }
