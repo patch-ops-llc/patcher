@@ -262,9 +262,10 @@ calls.analyze ─▶ seam (src/calls/seam.ts) ─▶ sales.classify
   covers, the gaps, and Review, Approve, Regenerate, Not a deal. Review opens the proposal
   as text to edit; an edit makes a new version and voids buttons that showed the old one.
   Regenerate takes a note for the model. The control UI has the same on **Sales**.
-- **Approval** makes that version final and renders its PDF (`src/sales/pdf.ts`), stored in
-  Postgres and served at `/sales/proposals/<id>/pdf` behind sign-in. Patcher sends nothing
-  to the prospect.
+- **The PDF** (`src/sales/pdf.ts`) is rendered for each version when it is drafted or
+  edited, stored in Postgres and served at `/sales/proposals/<id>/pdf` behind sign-in.
+  **Approval** makes that version final and gives back the link. Patcher sends nothing to
+  the prospect.
 - **The Penguin rule** (`src/sales/penguin.ts`). A sales call is a Penguin deal when an
   address saved in **Settings → Sales** is the call's host or among its invitees: Calendly's
   host `user_email`, Fathom's `recorded_by.email` or `calendar_invitees[].email`. A pasted

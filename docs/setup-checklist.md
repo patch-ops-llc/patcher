@@ -426,8 +426,8 @@ What happens then:
   not one, on its page under **Calls**.
 - The drafted proposal arrives as one message: **Review** (read and edit the text),
   **Approve**, **Regenerate** (with a note for the model), **Not a deal**. The same is on
-  **Sales** and on the proposal's page. Approving makes that version final and renders its
-  PDF, linked from the message, for a person to send. Patcher sends nothing to a prospect.
+  **Sales** and on the proposal's page. Approving makes that version final and links its
+  PDF from the message, for a person to send. Patcher sends nothing to a prospect.
 - For a Penguin deal the message first asks for the room: create the deal in the deal
   room's `/admin`, with no client domains yet, then click **Enter slug** and type its slug.
   **Skip** treats the proposal like any other. With the slug set, **Approve** opens a pull
