@@ -4,7 +4,7 @@ The PatchOps operations bot. It watches PatchOps' work, posts short recommendati
 PatchOps Slack workspace, and acts only after a person on the approver list approves the
 exact action shown.
 
-This repository holds three phases:
+This repository holds four phases:
 
 - **Phase 0, the foundation**: the two services, the database, the job queue and scheduler,
   the Slack hub app, the control UI, settings, the audit log, the pause switch, and the
@@ -18,6 +18,10 @@ This repository holds three phases:
   and by a catch-up poll, a call recorded by both analysed once, each call matched to a
   project in the registry, and the changes it asked for posted as one short Slack message.
   An approved code change starts a Cursor agent that opens a pull request.
+- **Phase 3a, sales calls and proposals**: each analysed call is read for what kind of call
+  it was; a sales call gets a proposal draft, offered in Slack to approve, edit or dismiss;
+  a Penguin deal that already has a room gets, on approval, a pull request with the
+  proposal as the room's content files. Nothing here merges it.
 
 - Setting it up: [`docs/setup-checklist.md`](docs/setup-checklist.md)
 - Slack app: [`slack/manifest.yaml`](slack/manifest.yaml)
@@ -211,10 +215,88 @@ transcripts.poll (every 15 min)  ▼
 - **By hand.** **Calls → Add a transcript** takes pasted text for a call recorded some
   other way.
 
-The next phase (sales calls, proposals, the deal room) attaches at `src/calls/seam.ts`:
-`onCallAnalysed` is called once per analysed call, the host and attendees are normalised
-from both sources, and `calls.call_type` is reserved and unwritten. Nothing in this phase
-classifies a call as a sales call.
+## Sales calls and proposals
+
+```
+calls.analyze ─▶ seam (src/calls/seam.ts) ─▶ sales.classify
+                                                  │ model: what kind of call, how sure, which words
+        below 0.50: nothing      0.50 to 0.80: "Sales call?" in Slack      0.80 and above
+                                                  │ Yes                          │
+                                                  └──────────────┬───────────────┘
+                                                     sales.draft ▼
+                    model: deal brief (every point with the words behind it)
+                    model: proposal from the brief, the template and the catalog without prices
+                    code:  the Investment section, from the rate card
+                    model: check of every claim against the brief; what fails is removed or flagged
+                                                                 │
+                                                      sales.post ▼
+              one Slack message ─▶ Approve ─▶ final proposal (Markdown and PDF)
+                                      └─ Penguin deal with a room ─▶ pull request under content/<slug>/
+```
+
+- **The seam.** `afterCallAnalysed` runs once a call's project question is settled, whether
+  or not a project was found: a first sales call usually has none. The sales phase is one
+  hook there (`registerSalesSeam`), and it only enqueues `sales.classify`.
+- **What kind of call** (`src/sales/classify.ts`). The model gets the redacted transcript,
+  the title, attendee names with e-mail domains, and the hints the rules found (a title
+  word from **Settings → Sales**, whether an attendee is from a registered client, whether
+  the call matched a project). It returns a type,
+  a confidence and a quote. A sales type is kept only when the quote is in the transcript;
+  without one the call can be asked about but never drafted by itself. The type is stored
+  on the call (`calls.call_type`).
+- **Deal brief** (`src/sales/brief.ts`). Company, people, problem, desired outcome, scope
+  items, constraints, timeline, budget signals, objections, next steps. A point whose quote
+  is not in the transcript is dropped, and what is missing is listed as a gap ("start
+  date", "budget"). A brief with no problem and no scope is not drafted from. A later call
+  with the same prospect adds to the same deal and makes the next proposal version.
+- **The draft** (`src/sales/draft.ts`). The model writes the template's sections from the
+  brief. It is never shown a price: the catalog it sees has names, descriptions and units.
+  The Investment section is built in code from the rate card, an amount the model wrote
+  into its prose is replaced with "TBD", and a service with no price is listed as "TBD"
+  and as a gap.
+- **The check** (`src/sales/grounding.ts`). A second model call lists claims in the draft
+  that the brief does not support. Each is matched to the draft's own text: a sentence that
+  can be removed cleanly is removed, anything else is flagged for the approver. If the
+  check cannot run, the draft is held; an unchecked draft is never offered.
+- **The message** (`src/sales/delivery.ts`) is one per sales call: who, what the draft
+  covers, the gaps, and Review, Approve, Regenerate, Not a deal. Review opens the proposal
+  as text to edit; an edit makes a new version and voids buttons that showed the old one.
+  Regenerate takes a note for the model. The control UI has the same on **Sales**.
+- **Approval** makes that version final and renders its PDF (`src/sales/pdf.ts`), stored in
+  Postgres and served at `/sales/proposals/<id>/pdf` behind sign-in. Patcher sends nothing
+  to the prospect.
+- **The Penguin rule** (`src/sales/penguin.ts`). A sales call is a Penguin deal when an
+  address saved in **Settings → Sales** is the call's host or among its invitees: Calendly's
+  host `user_email`, Fathom's `recorded_by.email` or `calendar_invitees[].email`. A pasted
+  transcript carries no addresses, so the rule cannot be tested and the message asks. A
+  person's mark on the deal (Penguin or not) overrides the rule in both directions and is
+  not changed by later calls.
+- **The deal room** (`src/dealroom/`). For a Penguin deal a person says which room it is
+  (its slug). On approval, the proposal is cut at its headings into the room's layout,
+  `content/<slug>/proposal/NN-name.md` each with a `title:` line and an `overview.md` when
+  the room has none, checked against the renderer's rules (no images, no raw HTML, safe
+  links, tables turned into lists), and opened as one pull request on a new `patcher/…`
+  branch. The pull request lists what a person still has to do by hand. `dealroom.sync`
+  reads its state every 30 minutes, so the Slack message says when it was merged or closed.
+- **What the deal room client can do** (`src/dealroom/github.ts`). It has its own GitHub
+  App, separate from the read-only one. Its token is asked for one repository with
+  contents and pull request write. It refuses any path outside `content/<slug>/`, creates
+  a branch and never updates an existing ref, and has no merge, close or delete request.
+  Protect `main` on the deal room repository as well: the client holds to this in code,
+  and branch protection makes GitHub hold to it too.
+- **What a model sees.** The redacted transcript and attendee names with e-mail domains for
+  the type and the brief; the brief, the template and the catalog without prices for the
+  draft; the brief and the draft for the check. Never an address, a key or a price.
+- **Not available.** With Patcher paused, the sales model switched off, a budget reached or
+  the provider down, a sales call waits as "held" and continues by itself. A reply that
+  fails validation twice marks it failed, with Retry.
+- **Deleted at the source.** When a call's only recording is deleted, its open offer is
+  closed, the brief's quotes are blanked and a draft nobody approved is emptied.
+
+The deal room's service API (creating a deal, writing content without a redeploy) is the
+next phase. It is a second `DealRoomAdapter` (`src/dealroom/adapter.ts`), chosen where
+`src/worker.ts` builds `integrations.dealRoom`; `deal_room_updates.route` and
+`deals.deal_room_ref` are already there for it.
 
 ## The audit dry run
 
@@ -244,6 +326,8 @@ src/
   calls/                            call transcripts: sources, connections, ingestion, matching,
                                     suggestions, the Slack message, and the seam for the sales phase
   cursor/                           Cursor Cloud Agents client
+  dealroom/                         the deal room: the proposal as its content files, the client that
+                                    can only open a pull request under content/<slug>/, the adapter
   db/                               pool, transactions, migration runner
   fix/                              "Fix via agent": the action, its brief, the agent poll
   github/                           read-only GitHub App client
@@ -253,6 +337,8 @@ src/
   railway/                          read queries, client, collectors, inventory
   recommendations/                  catalog, loop, delivery, executor, expiry, carriers
   registry/                         projects, their links and project-specific checks
+  sales/                            sales calls: the call type, the Penguin rule, the deal brief, the
+                                    proposal draft and its check, the PDF, the Slack message
   scheduler/                        schedules and the minute tick
   security/                         sealed secrets (public-key encryption for stored tokens), redaction
   settings/                         settings, channel routes, people, pause
@@ -277,7 +363,8 @@ test/                               vitest, against a real Postgres
 | A setting | `settingDefs` in `src/settings/settings.ts` |
 | A webhook from another system | As `/webhooks/:source/:token` in `src/web/app.ts` does: check, store in `webhook_events`, enqueue, acknowledge |
 | A transcript source | A `TranscriptSource` in `src/calls/sources/`, added to `integrations.transcripts` in `src/worker.ts` |
-| Something that reads every analysed call | `onCallAnalysed` in `src/calls/seam.ts` |
+| Something that reads every analysed call | `onCallAnalysed` in `src/calls/seam.ts`. It can run twice for one call, so make it safe to repeat |
+| Another way to reach the deal room | A `DealRoomAdapter` in `src/dealroom/adapter.ts`, chosen in `src/worker.ts` |
 | A message that carries several recommendations | A carrier in `src/recommendations/carriers.ts`, as the audit report does in `src/weekly/delivery.ts` |
 | An audit check | A `Check` in `src/weekly/checks.ts`, added to `CHECKS` |
 | Something else to read from Railway | A query in `src/railway/queries.ts` (read-only) and a collector in `src/railway/collect.ts` |
@@ -316,8 +403,8 @@ SLACK_API_URL=http://localhost:4010/api/
 SLACK_OIDC_URL=http://localhost:4010
 ```
 
-Without `RAILWAY_API_TOKEN`, `CURSOR_API_KEY`, `ANTHROPIC_API_KEY` and the `GITHUB_APP_*`
-variables the worker starts, logs each as not configured, and the **Audits** screen says
+Without `RAILWAY_API_TOKEN`, `CURSOR_API_KEY`, `ANTHROPIC_API_KEY`, the `GITHUB_APP_*` and the
+`DEALROOM_GITHUB_APP_*` variables the worker starts, logs each as not configured, and the **Audits** screen says
 which variables are missing. Connecting a call source also needs the token key pair
 (`TOKEN_PUBLIC_KEY` on web, `TOKEN_PRIVATE_KEY` on worker); the setup checklist has the
 command that makes one. A webhook is registered only when `APP_BASE_URL` is a public
@@ -352,7 +439,7 @@ The test run rebuilds the test database from `migrations/` each time.
   level, one line after a decision, detail in a thread or behind a link.
 - Text that came from outside is escaped before it goes into a Slack message or a page.
 - The public service never holds a key that decrypts stored tokens, nor the Railway, Cursor,
-  GitHub, Anthropic, Calendly or Fathom credentials.
+  GitHub, deal room, Anthropic, Calendly or Fathom credentials.
 - A model drafts and classifies. It is given redacted text, returns data that is validated,
   and cannot start an action. Nothing is used from output that failed validation.
 - Railway is only read. Variable values are never requested.
@@ -360,5 +447,8 @@ The test run rebuilds the test database from `migrations/` each time.
   workspace or a real call is committed.
 - Nothing is used from a webhook before its signature has been verified.
 - A suggestion from a call is kept only with words found in that call's transcript.
+- A proposal carries no price a model wrote. Prices come from the rate card, in code.
+- The deal room repository is written only as a pull request under `content/<slug>/`, only
+  after approval. Nothing merges it and nothing pushes to its default branch.
 - An agent is started only on a repository linked in the registry, only after approval, and
   nothing merges its pull request.
