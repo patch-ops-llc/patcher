@@ -133,9 +133,12 @@ All on **worker only**. `web` must never hold any of them.
 | `GITHUB_APP_ID` | "Production behind the default branch" and "critical dependency alerts" | The GitHub App's settings page → **About** → App ID |
 | `GITHUB_APP_PRIVATE_KEY` | Same | The GitHub App's settings page → **Private keys** → **Generate a private key**; paste the whole `.pem` file's contents |
 | `GITHUB_APP_INSTALLATION_ID` | Same | After installing the app: the number at the end of the installation's address, `https://github.com/organizations/<org>/settings/installations/<number>` |
+| `ANTHROPIC_API_KEY` | The model that assesses findings, ranks the report and drafts fix briefs | Claude Console (<https://platform.claude.com>) → **API keys** → **Create key** |
 
-Each of the three is independent. Without Railway nothing is audited; without Cursor the
-report has no "Fix via agent" buttons; without GitHub two checks are listed as not run.
+Each of the four is independent. Without Railway nothing is audited; without Cursor the
+report has no "Fix via agent" buttons; without GitHub two checks are listed as not run;
+without Anthropic the rules rank and word the report, and its second line says
+"ranked by rules (AI not configured)".
 
 ### Optional
 
@@ -144,8 +147,9 @@ report has no "Fix via agent" buttons; without GitHub two checks are listed as n
 | `DRY_RUN` | worker | `1` logs approved actions instead of executing them, whatever the UI switch says |
 | `LOG_LEVEL` | web, worker | `debug`, `info` (default), `warn`, `error` |
 
-`SLACK_API_URL`, `SLACK_OIDC_URL`, `RAILWAY_API_URL`, `CURSOR_API_URL` and `GITHUB_API_URL`
-are for local development only and are refused when `NODE_ENV=production`.
+`SLACK_API_URL`, `SLACK_OIDC_URL`, `RAILWAY_API_URL`, `CURSOR_API_URL`, `GITHUB_API_URL` and
+`ANTHROPIC_API_URL` are for local development only and are refused when
+`NODE_ENV=production`.
 
 ## 3. Owner: the Slack app
 
@@ -225,12 +229,27 @@ a workspace token can do anything in the workspace. So the token goes only into 
    repositories in the registry, and set the three `GITHUB_APP_*` variables on `worker`.
    Repositories outside that organisation need the app installed there too, or their two
    checks stay "not run".
-7. Check `https://<web address>/health`: `integrations.railway`, `cursor` and `github` show
-   `configured: true` once the worker has restarted with the variables. The **Audits** screen
-   shows the same, with the time each one last answered.
+7. **Anthropic key** (for the model steps). Create an API key and set `ANTHROPIC_API_KEY` on
+   `worker`. A key in a Console workspace made for Patcher, with a spend limit, is the
+   narrowest choice. With the key set, each audit sends Anthropic, per service that has a
+   finding above informational: the service's facts as the collectors read them (names,
+   deployment states, counts), its findings, and its error-log patterns after redaction and
+   up to a token cap. Variable names and values are never sent. Without the key nothing is
+   sent and the rules rank the report.
+   **Settings → AI** has the switch, the model per step, the daily and monthly budget (both
+   start unset), the log cap and how long to wait for the model. It also shows what has
+   been spent and every call by task, model and prompt version.
+8. Check `https://<web address>/health`: `integrations.railway`, `cursor`, `github` and
+   `anthropic` show `configured: true` once the worker has restarted with the variables. The
+   **Audits** screen shows the same, with the time each one last answered.
 
 Things to know:
 
+- With a model, an audit has two stages. The checks run and their findings appear under
+  **Audits** within a minute or two. The per-service requests go to Anthropic as one batch
+  (half price), which usually comes back within the hour; the report is posted to Slack
+  when it does. If it has not come back after the time set in **Settings → AI** (two hours
+  to start with), the report goes out with the rules' wording.
 - Muting or accepting a finding (on its page) keeps it out of the report until it is
   reopened. Both record who and why.
 - **Settings → Switches → Dry run** applies here too: an approved fix is logged and no agent

@@ -3,7 +3,7 @@ import { dataBlock } from '../ai/prompts.js';
 import type { TaskSpec } from '../ai/run.js';
 import type { TrackedFinding } from './findings.js';
 import type { AuditReport, FixInfo } from './report.js';
-import { CATEGORIES, subject } from './types.js';
+import { CATEGORIES } from './types.js';
 import { cleanLine, numbersGrounded, namesAnother } from './wording.js';
 
 /**
@@ -147,6 +147,3 @@ export function applyRollup(reply: RollupOutput, refs: Record<string, string>, r
   }
   return { order, lines, ranked, rejectedLines };
 }
-
-/** "acme api crash loop since Tuesday": the subject is always put in front by code, never by the model. */
-export const lineFor = (finding: TrackedFinding, line: string | undefined): string => `${subject(finding.scope)} ${line ?? finding.title}`;

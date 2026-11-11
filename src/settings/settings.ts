@@ -63,7 +63,7 @@ export const settingDefs = {
   'ai.audit.wait_minutes': {
     schema: z.number().int().min(5).max(24 * 60),
     default: 120,
-    label: 'Minutes to wait for the model before the report goes out ranked by the rules',
+    label: "Minutes to wait for the model's per-service assessments before the report goes out without them",
   },
 } as const;
 

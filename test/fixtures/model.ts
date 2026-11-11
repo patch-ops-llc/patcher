@@ -1,7 +1,7 @@
 import type { BatchItem, BatchResult, BatchState, ModelClient, ModelReply, ModelRequest } from '../../src/ai/client.js';
 import { ModelApiError } from '../../src/ai/client.js';
 
-/** What a test wants the model to say to one request: the tool input, or a full reply, or an error to throw. */
+/** What a test wants the model to say to one request: the tool input, a full reply, an error to throw, or a function returning one of those. */
 export type Answer = unknown;
 export type Responder = (request: ModelRequest, index: number) => Answer;
 
@@ -30,8 +30,8 @@ export class FakeModel implements ModelClient {
   private responders = new Map<string, Responder>();
 
   /** Sets what the model answers when asked to call `tool`. */
-  on(tool: string, responder: Responder | Answer): this {
-    this.responders.set(tool, typeof responder === 'function' ? (responder as Responder) : () => responder);
+  on(tool: string, answer: Answer): this {
+    this.responders.set(tool, typeof answer === 'function' ? (answer as Responder) : () => answer);
     return this;
   }
 
@@ -56,7 +56,7 @@ export class FakeModel implements ModelClient {
     try {
       return Promise.resolve(this.answer(request));
     } catch (err) {
-      return Promise.reject(err as Error);
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
     }
   }
 

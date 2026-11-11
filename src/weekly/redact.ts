@@ -1,6 +1,6 @@
 /**
  * Log lines and deploy errors can hold credentials and client data. Everything the audit
- * stores, posts or sends to an agent passes through `redact` first; log lines are further
+ * stores, posts or sends to a model or an agent passes through `redact` first; log lines are further
  * reduced to a signature, which keeps the shape of the message and drops its values.
  */
 import { redact } from '../security/redact.js';

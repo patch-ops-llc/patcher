@@ -147,6 +147,7 @@ async function main(): Promise<void> {
       railway: configured,
       github: { configured: false, missing: ['GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_INSTALLATION_ID'] },
       cursor: { configured: false, missing: ['CURSOR_API_KEY'] },
+      anthropic: { configured: false, missing: ['ANTHROPIC_API_KEY'] },
     },
     railwayRequests: snapshot.requests,
   };
@@ -164,6 +165,7 @@ async function main(): Promise<void> {
     '',
     '## Run',
     '',
+    '- Rule-based checks only: a dry run calls no model, so the order and the wording are the rules\'.',
     `- Railway requests: ${snapshot.requests}`,
     `- Probes: ${probes.size} services probed (once; up to three times when failing)`,
     `- Environments read: ${snapshot.projects.reduce((n, p) => n + p.environments.length, 0) - unread.length}, unread: ${unread.length}`,

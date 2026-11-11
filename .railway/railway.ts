@@ -76,6 +76,8 @@ export default defineRailway(() => {
       GITHUB_APP_ID: preserve(),
       GITHUB_APP_PRIVATE_KEY: preserve(),
       GITHUB_APP_INSTALLATION_ID: preserve(),
+      // The model that assesses, ranks and drafts. Unset: the rules rank the report.
+      ANTHROPIC_API_KEY: preserve(),
     },
   });
 

@@ -371,7 +371,18 @@ export async function completeAudit(deps: WorkerDeps, runId: string, service: An
   let drafted = 0;
   let proposed = 0;
   const briefProblems: string[] = [];
+  // An earlier attempt at finishing this run may have got as far as proposing. Those stand.
+  const earlier = await deps.pool.query<{ id: string; source_id: string }>(
+    `SELECT id, source_id FROM recommendations WHERE carrier_type = $1 AND carrier_id = $2 AND status = 'drafted'`,
+    [AUDIT_CARRIER, runId],
+  );
+  const already = new Map(earlier.rows.map((r) => [r.source_id, r.id]));
   for (const finding of top) {
+    const existing = already.get(finding.id);
+    if (existing) {
+      fixes.set(finding.id, { status: 'proposed', recommendationId: existing });
+      continue;
+    }
     if (finding.state !== 'open' || fixes.get(finding.id)?.status !== 'available') continue;
     try {
       const { brief, problem, reason: why } = await briefFor(deps, finding, runId);
@@ -390,7 +401,11 @@ export async function completeAudit(deps: WorkerDeps, runId: string, service: An
     }
   }
   const briefStep: AnalysisStep = !proposed
-    ? { key: 'brief', status: 'skipped', detail: 'Not run: no fix was proposed in this report.' }
+    ? {
+        key: 'brief',
+        status: 'skipped',
+        detail: already.size ? 'The fixes in this report were drafted on an earlier attempt.' : 'Not run: no fix was proposed in this report.',
+      }
     : {
         key: 'brief',
         status: drafted === proposed ? 'done' : drafted ? 'partial' : 'skipped',
