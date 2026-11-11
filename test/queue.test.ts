@@ -112,11 +112,18 @@ describe('job queue', () => {
 
   it('has the default retry policy and dead-letter queue on every job queue', async () => {
     const { rows } = await pool.query(
-      `SELECT name, retry_limit, retry_backoff, dead_letter FROM pgboss.queue WHERE name <> 'dead_letter'`,
+      `SELECT name, retry_limit, retry_backoff, dead_letter FROM pgboss.queue WHERE name NOT IN ('dead_letter', 'audit.run')`,
     );
-    expect(rows.length).toBeGreaterThanOrEqual(9);
+    expect(rows.length).toBeGreaterThanOrEqual(11);
     for (const row of rows) {
       expect(row).toMatchObject({ retry_limit: 5, retry_backoff: true, dead_letter: 'dead_letter' });
     }
+  });
+
+  it('runs the audit once, with an hour to finish, instead of retrying it', async () => {
+    const { rows } = await pool.query(
+      `SELECT retry_limit, expire_seconds, dead_letter FROM pgboss.queue WHERE name = 'audit.run'`,
+    );
+    expect(rows).toEqual([{ retry_limit: 0, expire_seconds: 3600, dead_letter: 'dead_letter' }]);
   });
 });

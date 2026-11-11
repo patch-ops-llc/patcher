@@ -41,6 +41,7 @@ describe('settings', () => {
       'approvals.expire_hours': 72,
       'approvals.reminder_hours': 24,
       'slack.max_posts_per_hour': 6,
+      'audit.agent_timeout_minutes': 180,
     });
   });
 
