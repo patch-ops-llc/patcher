@@ -505,7 +505,10 @@ describe('the Slack inbox screen', () => {
 
   it('shows the forwarding address once, keeps only its hash, and logs mail without its content', async () => {
     const { agent, post, submit } = await signIn(OWNER);
-    expect((await agent.get('/inbox')).text).toContain('save the inbound address of the mail service');
+    const notReady = (await agent.get('/inbox')).text;
+    expect(notReady).toContain('Save the inbound address of the mail service');
+    // The password is set in this test, so the page does not ask for it.
+    expect(notReady).not.toContain('Set <code>INBOUND_EMAIL_WEBHOOK_SECRET</code>');
     expect((await submit('/inbox/email/alias')).page).toContain('Save the inbound address of the mail service in Settings first.');
     await setSetting(pool, 'inbox.email_address', 'abc123@inbound.example.com', OWNER);
 

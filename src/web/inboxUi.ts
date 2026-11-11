@@ -113,6 +113,7 @@ export function inboxRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       hasRoute: route !== null,
       canConnect: canConnect(),
       mailReady: Boolean(deps.inboundEmailSecret && settings['inbox.email_address']),
+      mailSecretSet: Boolean(deps.inboundEmailSecret),
       hasAlias: alias !== null,
       ...extra,
     };

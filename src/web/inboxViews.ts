@@ -69,6 +69,7 @@ export interface InboxPageData {
   /** Whether the app's client id and secret, the workspace id and the sealing key are all set. */
   canConnect: boolean;
   mailReady: boolean;
+  mailSecretSet: boolean;
   hasAlias: boolean;
   /** The forwarding address, shown once, straight after it was issued. */
   issuedAddress?: string | null;
@@ -304,8 +305,10 @@ export function inboxPage(ctx: PageContext, data: InboxPageData): string {
         ${data.mailReady
           ? ''
           : html`<div class="flash flash-info">
-              Not ready: ${s['inbox.email_address'] ? '' : html`save the inbound address of the mail service in <a href="/settings#inbox">Settings</a>; `}set
-              <code>INBOUND_EMAIL_WEBHOOK_SECRET</code> on the web service. The steps are in <code>docs/setup-checklist.md</code>.
+              Not ready.
+              ${s['inbox.email_address'] ? '' : html`Save the inbound address of the mail service in <a href="/settings#inbox">Settings</a>. `}
+              ${data.mailSecretSet ? '' : html`Set <code>INBOUND_EMAIL_WEBHOOK_SECRET</code> on the web service. `}
+              The steps are in <code>docs/setup-checklist.md</code>.
             </div>`}
         ${data.issuedAddress
           ? html`<div class="flash flash-ok">
