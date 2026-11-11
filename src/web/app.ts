@@ -2,6 +2,8 @@ import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import { sourceHealth, storeDelivery } from '../calls/connections.js';
+import { ingestMail, passwordMatches } from '../inbox/email.js';
+import { readerHealth } from '../inbox/store.js';
 import { publicDir } from '../paths.js';
 import { listIntegrations } from '../integrations/status.js';
 import { queueStats } from '../queue/queue.js';
@@ -42,11 +44,12 @@ export function createApp(deps: WebDeps): express.Express {
   app.get('/health', async (_req, res) => {
     const features = Object.fromEntries(Object.entries(deps.features).map(([name, f]) => [name, f.configured]));
     try {
-      const [queue, settings, integrations, callSources] = await Promise.all([
+      const [queue, settings, integrations, callSources, slackReader] = await Promise.all([
         queueStats(deps.pool),
         getAllSettings(deps.pool),
         listIntegrations(deps.pool),
         sourceHealth(deps.pool),
+        readerHealth(deps.pool),
       ]);
       res.json({
         ok: true,
@@ -63,6 +66,8 @@ export function createApp(deps: WebDeps): express.Express {
         ),
         // Connected Calendly and Fathom keys, and the last time one answered.
         callSources,
+        // Counts and times only: whether reading is on, when a message last arrived, what is waiting.
+        slackReader: { enabled: settings['inbox.enabled'], ...slackReader },
       });
     } catch (err) {
       deps.log.error('health check failed', { err });
@@ -90,6 +95,25 @@ export function createApp(deps: WebDeps): express.Express {
     else res.status(200).json({ ok: true });
   });
 
+  /**
+   * Slack notification mail, forwarded by the owner and delivered here by the inbound mail
+   * service (design 8.4). The service proves itself with a password; the secret part of the
+   * forwarding address is checked next. 403 tells the service not to deliver it again.
+   */
+  app.post('/ingest/email', express.json({ limit: '2mb' }), async (req, res) => {
+    if (!deps.inboundEmailSecret) {
+      res.status(503).json({ error: 'not_configured' });
+      return;
+    }
+    if (!passwordMatches(req.get('authorization'), deps.inboundEmailSecret)) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+    const result = await ingestMail(deps, deps.inboundMail, req.body);
+    if (result.status === 200) res.status(200).json({ ok: true });
+    else res.status(result.status).json({ error: 'forbidden' });
+  });
+
   app.use('/slack', slackRouter(deps));
   app.use(uiRouter(deps));
 
@@ -101,11 +125,17 @@ export function createApp(deps: WebDeps): express.Express {
     deps.log.error('request failed', { err, method: req.method, path: req.path });
     if (res.headersSent) return;
     if ((err as { type?: unknown } | null)?.type === 'entity.too.large') {
-      if (req.path.startsWith('/webhooks/')) res.status(413).json({ error: 'too_large' });
+      // A mail too large to read is refused for good, so the mail service stops sending it.
+      if (req.path.startsWith('/ingest/')) res.status(403).json({ error: 'too_large' });
+      else if (req.path.startsWith('/webhooks/')) res.status(413).json({ error: 'too_large' });
       else res.status(413).send(errorPage(413, 'That is too long to send in one form.'));
       return;
     }
-    if (req.path.startsWith('/slack/') || req.path.startsWith('/webhooks/')) res.status(500).json({ error: 'internal_error' });
+    if ((err as { type?: unknown } | null)?.type === 'entity.parse.failed' && req.path.startsWith('/ingest/')) {
+      res.status(403).json({ error: 'unreadable' });
+      return;
+    }
+    if (req.path.startsWith('/slack/') || req.path.startsWith('/webhooks/') || req.path.startsWith('/ingest/')) res.status(500).json({ error: 'internal_error' });
     else res.status(500).send(errorPage(500, 'Something went wrong. It has been logged.'));
   });
 

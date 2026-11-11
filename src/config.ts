@@ -33,6 +33,8 @@ const webSchema = baseSchema.extend({
   SLACK_SIGNING_SECRET: optional(z.string().min(10)),
   BOOTSTRAP_OWNER_SLACK_USER_ID: optional(z.string().regex(/^[UW][A-Z0-9]+$/)),
   TOKEN_PUBLIC_KEY: optional(z.string().min(100)),
+  // The password the inbound mail service sends with each delivery to /ingest/email.
+  INBOUND_EMAIL_WEBHOOK_SECRET: optional(z.string().min(24)),
   // Development and test only: point Sign in with Slack at a local fake.
   SLACK_OIDC_URL: optional(z.string().url()),
 });
@@ -124,6 +126,7 @@ export function loadWebConfig(env: NodeJS.ProcessEnv = process.env) {
     slackSigningSecret: parsed.SLACK_SIGNING_SECRET,
     bootstrapOwner: parsed.BOOTSTRAP_OWNER_SLACK_USER_ID,
     tokenPublicKey: parsed.TOKEN_PUBLIC_KEY,
+    inboundEmailSecret: parsed.INBOUND_EMAIL_WEBHOOK_SECRET,
     slackOidcUrl: parsed.SLACK_OIDC_URL,
     features: {
       /** Events, buttons and the slash command. */
@@ -140,6 +143,15 @@ export function loadWebConfig(env: NodeJS.ProcessEnv = process.env) {
         BOOTSTRAP_OWNER_SLACK_USER_ID: parsed.BOOTSTRAP_OWNER_SLACK_USER_ID,
       }),
       tokenEncryption: feature({ TOKEN_PUBLIC_KEY: parsed.TOKEN_PUBLIC_KEY }),
+      /** Connecting the reader: the owner authorises the hub app to read their messages. */
+      slackReader: feature({
+        SLACK_CLIENT_ID: parsed.SLACK_CLIENT_ID,
+        SLACK_CLIENT_SECRET: parsed.SLACK_CLIENT_SECRET,
+        SLACK_TEAM_ID: parsed.SLACK_TEAM_ID,
+        TOKEN_PUBLIC_KEY: parsed.TOKEN_PUBLIC_KEY,
+      }),
+      /** Forwarded Slack notification mail, for workspaces the app is not installed in. */
+      inboundEmail: feature({ INBOUND_EMAIL_WEBHOOK_SECRET: parsed.INBOUND_EMAIL_WEBHOOK_SECRET }),
     },
   };
 }

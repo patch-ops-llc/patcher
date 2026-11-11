@@ -2,6 +2,10 @@ import { ConfigError, loadWebConfig } from './config.js';
 import { createPool } from './db/pool.js';
 import { registerCallCatalog } from './calls/catalog.js';
 import { registerFixCatalog } from './fix/agentFix.js';
+import { registerInboxCatalog } from './inbox/catalog.js';
+import { postmarkInbound } from './inbox/email.js';
+import { createSlackReaderOAuth } from './inbox/reader.js';
+import { backfillAfterGap } from './inbox/workspace.js';
 import { createLogger } from './log.js';
 import { JobQueue } from './queue/queue.js';
 import { createCatalog } from './recommendations/catalog.js';
@@ -30,11 +34,20 @@ async function main(): Promise<void> {
     log.info('bootstrap owner added to the allowlist');
   }
 
+  // Slack stops retrying an event after a few minutes. If this service was away for longer,
+  // the worker reads what was missed since the last event seen.
+  try {
+    const started = await backfillAfterGap({ pool, queue });
+    if (started) log.info('slack catch-up requested after a gap', { workspaces: started });
+  } catch (err) {
+    log.warn('could not check for a gap in slack events', { err });
+  }
+
   const app = createApp({
     pool,
     queue,
     // Registered without a runtime: the public service validates and describes the action, never runs it.
-    catalog: registerSalesCatalog(registerCallCatalog(registerFixCatalog(createCatalog(), null), null), null),
+    catalog: registerInboxCatalog(registerSalesCatalog(registerCallCatalog(registerFixCatalog(createCatalog(), null), null), null), null),
     log,
     appBaseUrl: config.appBaseUrl,
     cookies: { secret: config.sessionSecret, secure: config.appBaseUrl.startsWith('https://') },
@@ -57,6 +70,17 @@ async function main(): Promise<void> {
       : null,
     features: config.features,
     seal: tokenPublicKey ? (plaintext) => seal(tokenPublicKey, plaintext) : null,
+    readerOAuth:
+      config.slackClientId && config.slackClientSecret && config.hubTeamId
+        ? createSlackReaderOAuth({
+            clientId: config.slackClientId,
+            clientSecret: config.slackClientSecret,
+            teamId: config.hubTeamId,
+            baseUrl: config.slackOidcUrl,
+          })
+        : null,
+    inboundEmailSecret: config.inboundEmailSecret,
+    inboundMail: postmarkInbound,
   });
 
   const server = app.listen(config.port, () => log.info('web started', { port: config.port, baseUrl: config.appBaseUrl }));

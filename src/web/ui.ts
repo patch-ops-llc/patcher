@@ -26,10 +26,12 @@ import type { Role, User } from '../settings/users.js';
 import { ROLES, UserChangeError, canDecide, hasRole, listUsers, removeUser, saveUser } from '../settings/users.js';
 import { OidcError } from '../slack/oidc.js';
 import { resumeHeldCallPosts } from '../calls/delivery.js';
+import { resumeHeldInboxPosts } from '../inbox/delivery.js';
 import { resumeHeldSalesPosts } from '../sales/delivery.js';
 import { resumeHeldReports } from '../weekly/delivery.js';
 import { auditRoutes } from './auditUi.js';
 import { MAX_UPLOAD, callRoutes, callsSettings } from './callsUi.js';
+import { inboxRoutes, inboxSettings } from './inboxUi.js';
 import { MAX_PROPOSAL_FORM, salesRoutes, salesSettings } from './salesUi.js';
 import { authorizeLogin } from './auth.js';
 import type { WebDeps } from './deps.js';
@@ -327,6 +329,7 @@ export function uiRouter(deps: WebDeps): Router {
         kinds: deps.catalog.kindNames(),
         callsCard: await callsSettings(deps, ctx, settings),
         salesCard: await salesSettings(deps, ctx, settings),
+        inboxCard: await inboxSettings(deps, ctx, settings),
         dryRunEnv: deps.dryRunEnv,
         slackReady: slackReady(),
         ai: {
@@ -364,6 +367,7 @@ export function uiRouter(deps: WebDeps): Router {
         if (type === 'audit') await resumeHeldReports(deps);
         if (type === 'calls') await resumeHeldCallPosts(deps);
         if (type === 'sales') await resumeHeldSalesPosts(deps);
+        if (type === 'inbox') await resumeHeldInboxPosts(deps);
       }
       await back(res, '/settings#routing', 'ok', changed ? `${REPORT_TYPES[type].label} channel saved.` : 'Nothing changed.');
     } catch (err) {
@@ -520,6 +524,7 @@ export function uiRouter(deps: WebDeps): Router {
   auditRoutes(router, deps, helpers);
   callRoutes(router, deps, helpers);
   salesRoutes(router, deps, helpers);
+  inboxRoutes(router, deps, helpers);
 
   return router;
 }

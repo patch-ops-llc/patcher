@@ -62,6 +62,9 @@ const QUEUE_OVERRIDES: Partial<Record<JobName, { retryLimit?: number; expireInSe
   'calls.suggest': { expireInSeconds: 1800 },
   // Three model calls, the middle one on the top tier.
   'sales.draft': { expireInSeconds: 1800 },
+  // One page of conversations, a history request for each, at Slack's rate limit.
+  'inbox.backfill': { expireInSeconds: 1800 },
+  'inbox.bundle': { expireInSeconds: 900 },
 };
 
 function errorText(output: unknown): string {
