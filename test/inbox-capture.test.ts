@@ -125,6 +125,9 @@ describe('the capture seam', () => {
   it('accepts a message from the companion sources through the same schema, and refuses a malformed one', async () => {
     const other = await mailWorkspace(pool, 'acme-co', 'Acme');
     const fromCompanion = captured(other, { source: 'companion_notification', channelId: null, channelName: 'project-portal', ts: null, senderId: null, senderName: 'Dana Reyes', link: null });
+    // The companion is opted in per workspace: until it is, the seam itself refuses its messages.
+    expect(await receiveCaptured(deps(), fromCompanion)).toBe('companion_off');
+    await pool.query('UPDATE slack_workspaces SET companion_enabled = true WHERE id = $1', [other]);
     expect(await receiveCaptured(deps(), fromCompanion)).toBe('stored');
     expect((await listBundles(pool))[0]).toMatchObject({ source: 'companion_notification', channelKey: 'name:project-portal' });
     expect(capturedMessage.safeParse({ ...fromCompanion, source: 'carrier_pigeon' }).success).toBe(false);

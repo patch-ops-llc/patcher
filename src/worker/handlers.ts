@@ -3,6 +3,8 @@ import { handleWebhook, pollAll, pollConnection, removeConnection, setupConnecti
 import { postCall, postCallDetails, resumeHeldCallPosts } from '../calls/delivery.js';
 import { purgeTranscripts } from '../calls/ingest.js';
 import { pollAgentRun } from '../fix/agentFix.js';
+import { purgeCompanion } from '../inbox/companion.js';
+import { watchCompanion } from '../inbox/companionWatch.js';
 import { postDigest, postItem, resumeHeldInboxPosts, runDigest } from '../inbox/delivery.js';
 import { processBundle, recheckChannel, sweepBundles } from '../inbox/pipeline.js';
 import { purgeInbox } from '../inbox/retention.js';
@@ -49,12 +51,17 @@ export const scheduleHandlers: Record<string, ScheduleHandler> = {
     const polled = await pollAll(deps);
     return resumed ? `${polled} ${resumed} waiting ${resumed === 1 ? 'call' : 'calls'} picked up again.` : polled;
   },
-  'retention.purge': async (deps) => `${await purgeTranscripts(deps.pool)}, ${await purgeInbox(deps.pool)}`,
+  'retention.purge': async (deps) => {
+    await purgeCompanion(deps.pool);
+    return `${await purgeTranscripts(deps.pool)}, ${await purgeInbox(deps.pool)}`;
+  },
   'slack.digest': (deps) => runDigest(deps, 'schedule'),
   // Bundles that waited for the model, or whose job was lost, are put back on the queue.
   'slack.catchup': (deps) => sweepBundles(deps),
   // Reads the state of the deal room pull requests Patcher opened. It never changes one.
   'dealroom.sync': (deps) => syncDealRoom(deps),
+  // A reader that was signed out, stopped reporting, or is open and sees nothing.
+  'companion.watch': (deps) => watchCompanion(deps),
 };
 
 export async function runSchedule(

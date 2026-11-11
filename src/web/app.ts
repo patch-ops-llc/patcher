@@ -2,6 +2,8 @@ import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import { sourceHealth, storeDelivery } from '../calls/connections.js';
+import { companionConfig, companionHealth, deviceForKey, heartbeat, ingestBatch } from '../inbox/companion.js';
+import type { Device } from '../inbox/companion.js';
 import { ingestMail, passwordMatches } from '../inbox/email.js';
 import { readerHealth } from '../inbox/store.js';
 import { publicDir } from '../paths.js';
@@ -12,6 +14,8 @@ import type { WebDeps } from './deps.js';
 import { slackRouter } from './slackRoutes.js';
 import { uiRouter } from './ui.js';
 import { errorPage } from './views.js';
+
+const EXTENSION_ORIGIN = /^chrome-extension:\/\/[a-p]{32}$/;
 
 /**
  * The public service. It verifies, records and acknowledges; it does no slow work and makes
@@ -44,12 +48,13 @@ export function createApp(deps: WebDeps): express.Express {
   app.get('/health', async (_req, res) => {
     const features = Object.fromEntries(Object.entries(deps.features).map(([name, f]) => [name, f.configured]));
     try {
-      const [queue, settings, integrations, callSources, slackReader] = await Promise.all([
+      const [queue, settings, integrations, callSources, slackReader, companion] = await Promise.all([
         queueStats(deps.pool),
         getAllSettings(deps.pool),
         listIntegrations(deps.pool),
         sourceHealth(deps.pool),
         readerHealth(deps.pool),
+        companionHealth(deps.pool),
       ]);
       res.json({
         ok: true,
@@ -67,7 +72,8 @@ export function createApp(deps: WebDeps): express.Express {
         // Connected Calendly and Fathom keys, and the last time one answered.
         callSources,
         // Counts and times only: whether reading is on, when a message last arrived, what is waiting.
-        slackReader: { enabled: settings['inbox.enabled'], ...slackReader },
+        // The companion: how many readers are paired, how many reported in the last minutes, and when one last did.
+        slackReader: { enabled: settings['inbox.enabled'], ...slackReader, companion },
       });
     } catch (err) {
       deps.log.error('health check failed', { err });
@@ -114,6 +120,54 @@ export function createApp(deps: WebDeps): express.Express {
     else res.status(result.status).json({ error: 'forbidden' });
   });
 
+  /**
+   * The browser companion (design 8.5): a Chrome extension in the owner's reader profile.
+   * It proves itself with a device key issued in the UI, of which only a hash is stored. A
+   * key can read which workspaces are switched on, post messages for them and report its own
+   * state; nothing else. The extension's requests come from its own origin, so these three
+   * routes answer cross-origin requests from an extension and from nowhere else.
+   */
+  const companion = express.Router();
+  companion.use((req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    res.vary('Origin');
+    const origin = req.get('origin');
+    if (origin && EXTENSION_ORIGIN.test(origin)) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.set('Access-Control-Allow-Headers', 'authorization, content-type');
+      res.set('Access-Control-Allow-Methods', 'GET, POST');
+      res.set('Access-Control-Max-Age', '600');
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+  const paired = async (req: Request, res: Response): Promise<Device | null> => {
+    const device = await deviceForKey(deps.pool, req.get('authorization'));
+    // 401 is also what a revoked key gets. The extension stops and forgets what it had queued.
+    if (!device) res.status(401).json({ ok: false, error: 'unauthorized' });
+    return device;
+  };
+  companion.get('/config', async (req, res) => {
+    const device = await paired(req, res);
+    if (device) res.json(await companionConfig(deps.pool, device));
+  });
+  companion.post('/heartbeat', express.json({ limit: '200kb' }), async (req, res) => {
+    const device = await paired(req, res);
+    if (!device) return;
+    const result = await heartbeat(deps.pool, device, req.body);
+    res.status(result.status).json(result.body);
+  });
+  companion.post('/', express.json({ limit: '2mb' }), async (req, res) => {
+    const device = await paired(req, res);
+    if (!device) return;
+    const result = await ingestBatch(deps, device, req.body);
+    res.status(result.status).json(result.body);
+  });
+  app.use('/ingest/slack', companion);
+
   app.use('/slack', slackRouter(deps));
   app.use(uiRouter(deps));
 
@@ -126,13 +180,14 @@ export function createApp(deps: WebDeps): express.Express {
     if (res.headersSent) return;
     if ((err as { type?: unknown } | null)?.type === 'entity.too.large') {
       // A mail too large to read is refused for good, so the mail service stops sending it.
-      if (req.path.startsWith('/ingest/')) res.status(403).json({ error: 'too_large' });
+      if (req.path.startsWith('/ingest/slack')) res.status(413).json({ ok: false, error: 'too_large' });
+      else if (req.path.startsWith('/ingest/')) res.status(403).json({ error: 'too_large' });
       else if (req.path.startsWith('/webhooks/')) res.status(413).json({ error: 'too_large' });
       else res.status(413).send(errorPage(413, 'That is too long to send in one form.'));
       return;
     }
     if ((err as { type?: unknown } | null)?.type === 'entity.parse.failed' && req.path.startsWith('/ingest/')) {
-      res.status(403).json({ error: 'unreadable' });
+      res.status(req.path.startsWith('/ingest/slack') ? 400 : 403).json({ error: 'unreadable' });
       return;
     }
     if (req.path.startsWith('/slack/') || req.path.startsWith('/webhooks/') || req.path.startsWith('/ingest/')) res.status(500).json({ error: 'internal_error' });

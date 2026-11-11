@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Response, Router } from 'express';
 import { spentSince } from '../ai/run.js';
 import { recordAudit } from '../audit/auditLog.js';
+import { DeviceInputError, companionOverview, isMemberId, issueDevice, revokeDevice } from '../inbox/companion.js';
 import { resumeHeldInboxPosts } from '../inbox/delivery.js';
 import { activeAlias, forwardingAddress, issueAlias, recentMail } from '../inbox/email.js';
 import { ReaderOAuthError, missingHistoryScopes } from '../inbox/reader.js';
@@ -76,8 +77,9 @@ export function inboxRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
   // Only this session can produce it, and it is useless as the CSRF token itself.
   const stateFor = (session: Session): string => createHash('sha256').update(`slack-reader:${session.csrfToken}`).digest('base64url');
 
-  const pageData = async (extra: Pick<InboxPageData, 'issuedAddress'> = {}): Promise<InboxPageData> => {
-    const [settings, workspaces, rules, suggestions, projects, items, log, drops, digests, mail, tasks, route, alias] = await Promise.all([
+  const pageData = async (extra: Pick<InboxPageData, 'issuedAddress'> & { issuedDevice?: { label: string; key: string } } = {}): Promise<InboxPageData> => {
+    const { issuedDevice, ...rest } = extra;
+    const [settings, workspaces, rules, suggestions, projects, items, log, drops, digests, mail, tasks, route, alias, overview] = await Promise.all([
       getAllSettings(deps.pool),
       listWorkspaces(deps.pool),
       listRules(deps.pool),
@@ -91,6 +93,7 @@ export function inboxRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       looseTasks(deps.pool),
       getRoute(deps.pool, 'inbox'),
       activeAlias(deps.pool),
+      companionOverview(deps.pool),
     ]);
     const backfills = new Map<string, BackfillRow>();
     for (const w of workspaces.filter((w) => w.readMode === 'api')) {
@@ -115,7 +118,8 @@ export function inboxRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       mailReady: Boolean(deps.inboundEmailSecret && settings['inbox.email_address']),
       mailSecretSet: Boolean(deps.inboundEmailSecret),
       hasAlias: alias !== null,
-      ...extra,
+      companion: { overview, appBaseUrl: deps.appBaseUrl, issuedDevice: issuedDevice ?? null },
+      ...rest,
     };
   };
 
@@ -227,6 +231,12 @@ export function inboxRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       await ui.back(res, '/inbox#workspaces', 'error', 'That project does not exist.');
       return;
     }
+    // Absent from the form: left as it is. Empty: cleared.
+    const member = typeof body.reader_user_id === 'string' ? text(body.reader_user_id).toUpperCase() : undefined;
+    if (member && !isMemberId(member)) {
+      await ui.back(res, '/inbox#workspaces', 'error', 'A member ID looks like U012AB3CD. It is under "Copy member ID" in your Slack profile in that workspace.');
+      return;
+    }
     const actor = ui.actorOf(res);
     const result = await updateWorkspace(
       deps.pool,
@@ -236,6 +246,10 @@ export function inboxRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
         readDms: body.read_dms === '1',
         channelDefault: body.channel_default === 'exclude' ? 'exclude' : 'include',
         projectId,
+        // The companion needs the workspace's id, which only a reader's report or the app gives.
+        companionEnabled: workspace.teamId ? body.companion_enabled === '1' : false,
+        captureLevel: body.capture_level === 'page' ? 'page' : body.capture_level === 'notifications' ? 'notifications' : undefined,
+        readerUserId: member === undefined ? undefined : member || null,
       },
       actor,
     );
@@ -262,6 +276,26 @@ export function inboxRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       not_connected: 'This workspace is not connected and switched on, so there is nothing to read.',
     }[outcome];
     await ui.back(res, '/inbox#workspaces', outcome === 'started' ? 'ok' : 'error', message);
+  });
+
+  // The browser companion ------------------------------------------------------------------------
+
+  router.post('/inbox/companion/devices', ui.owner, async (req, res) => {
+    const label = text((req.body as Record<string, unknown>).label);
+    try {
+      const issued = await issueDevice(deps.pool, { label }, ui.actorOf(res));
+      // Rendered here rather than after a redirect: the key is a secret and is never stored, not even as a flash.
+      const [ctx, data] = await Promise.all([ui.context(req, res), pageData({ issuedDevice: { label: label.slice(0, 60), key: issued.key } })]);
+      res.set('Cache-Control', 'no-store').send(inboxPage(ctx, data));
+    } catch (err) {
+      if (!(err instanceof DeviceInputError)) throw err;
+      await ui.back(res, '/inbox#companion', 'error', err.message);
+    }
+  });
+
+  router.post('/inbox/companion/devices/:id/revoke', ui.owner, async (req, res) => {
+    const revoked = await revokeDevice(deps.pool, String(req.params.id), ui.actorOf(res));
+    await ui.back(res, '/inbox#companion', revoked ? 'ok' : 'error', revoked ? 'Revoked. That reader sends nothing from its next report on.' : 'That reader does not exist or is already revoked.');
   });
 
   // Channel rules --------------------------------------------------------------------------------
@@ -361,7 +395,7 @@ export function inboxRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
         const raw = text(body[key]);
         if (raw) changes.push([key, raw]);
       }
-      for (const key of ['inbox.settle_seconds', 'inbox.unanalysed_after_minutes', 'inbox.retention_days', 'ai.inbox.daily_budget_usd', 'ai.inbox.monthly_budget_usd'] as const) {
+      for (const key of ['inbox.settle_seconds', 'inbox.unanalysed_after_minutes', 'inbox.retention_days', 'inbox.companion_silent_minutes', 'ai.inbox.daily_budget_usd', 'ai.inbox.monthly_budget_usd'] as const) {
         const raw = text(body[key]);
         if (raw) changes.push([key, Number(raw)]);
       }

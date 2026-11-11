@@ -494,3 +494,34 @@ details > summary {
     overflow-x: auto;
   }
 }
+
+/* Reader coverage: one cell per hour, oldest first. */
+.cov-strip {
+  display: inline-flex;
+  gap: 2px;
+  vertical-align: middle;
+}
+
+.cov {
+  display: inline-block;
+  width: 0.55rem;
+  height: 1.1rem;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.cov-some {
+  background: var(--err-bg);
+  border-color: var(--err-ink);
+}
+
+.cov-most {
+  background: var(--warn-bg);
+  border-color: var(--warn-ink);
+}
+
+.cov-full {
+  background: var(--ok-ink);
+  border-color: var(--ok-ink);
+}

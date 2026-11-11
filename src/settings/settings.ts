@@ -321,6 +321,11 @@ export const settingDefs = {
     default: 14,
     label: 'Days to keep the text of Slack messages',
   },
+  'inbox.companion_silent_minutes': {
+    schema: z.number().int().min(5).max(240),
+    default: 15,
+    label: 'Minutes without a report from the browser companion, in working hours, before the errors channel is told',
+  },
   'inbox.agent_enabled': {
     schema: z.boolean(),
     default: true,
