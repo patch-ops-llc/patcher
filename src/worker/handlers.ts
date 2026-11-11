@@ -49,7 +49,7 @@ export const scheduleHandlers: Record<string, ScheduleHandler> = {
     const polled = await pollAll(deps);
     return resumed ? `${polled} ${resumed} waiting ${resumed === 1 ? 'call' : 'calls'} picked up again.` : polled;
   },
-  'retention.purge': async (deps) => `${await purgeTranscripts(deps.pool)} ${await purgeInbox(deps.pool)}`,
+  'retention.purge': async (deps) => `${await purgeTranscripts(deps.pool)}, ${await purgeInbox(deps.pool)}`,
   'slack.digest': (deps) => runDigest(deps, 'schedule'),
   // Bundles that waited for the model, or whose job was lost, are put back on the queue.
   'slack.catchup': (deps) => sweepBundles(deps),

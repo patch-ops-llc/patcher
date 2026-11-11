@@ -2,7 +2,14 @@ import type { Pool } from '../../src/db/pool.js';
 import type { RawSlackMessage, ReaderChannel, ReaderGrant, ReaderIdentity, SlackReader, SlackReaderOAuth } from '../../src/inbox/reader.js';
 import { READER_SCOPES, ReaderOAuthError } from '../../src/inbox/reader.js';
 import type { CapturedMessage } from '../../src/inbox/capture.js';
+import { postDigest, postItem } from '../../src/inbox/delivery.js';
+import { processBundle, recheckChannel } from '../../src/inbox/pipeline.js';
+import { checkWorkspace, runBackfill, workspaceOff } from '../../src/inbox/workspace.js';
+import { postDetails, postRecommendation, syncMessage } from '../../src/recommendations/delivery.js';
+import { executeAction } from '../../src/recommendations/executor.js';
 import { SlackApiError } from '../../src/slack/client.js';
+import { handleSlackEvent } from '../../src/worker/handlers.js';
+import type { Harness } from '../helpers.js';
 import { HUB, OWNER } from '../helpers.js';
 import { testSecrets } from './calls.js';
 
@@ -223,3 +230,30 @@ export const recommendAnswer = (overrides: Record<string, unknown> = {}) => ({
   quote: ASK,
   ...overrides,
 });
+
+/** Runs what was enqueued, the way the worker would, until the queue is empty. */
+export async function work(h: Harness): Promise<string[]> {
+  const ran: string[] = [];
+  for (let round = 0; round < 15 && h.queue.jobs.length; round += 1) {
+    const jobs = h.queue.jobs.splice(0);
+    for (const job of jobs) {
+      const data = job.data as Record<string, string>;
+      ran.push(job.name);
+      if (job.name === 'inbox.bundle') await processBundle(h.worker, data.bundleId!);
+      else if (job.name === 'inbox.post') await postItem(h.worker, data.bundleId!);
+      else if (job.name === 'inbox.digest.post') await postDigest(h.worker, data.digestId!);
+      else if (job.name === 'inbox.recheck') await recheckChannel(h.worker, data.workspaceId!, data.channelKey!);
+      else if (job.name === 'inbox.backfill') await runBackfill(h.worker, data.backfillId!);
+      else if (job.name === 'inbox.workspace.check') await checkWorkspace(h.worker, data.workspaceId!);
+      else if (job.name === 'inbox.workspace.off') await workspaceOff(h.worker, data.workspaceId!, data.requestedBy!);
+      else if (job.name === 'recommendation.post') await postRecommendation(h.worker, data.recommendationId!);
+      else if (job.name === 'recommendation.sync') await syncMessage(h.worker, data.recommendationId!);
+      else if (job.name === 'recommendation.details') await postDetails(h.worker, data.recommendationId!);
+      else if (job.name === 'action.execute') await executeAction(h.worker, data.actionId!);
+      else if (job.name === 'slack.event') await handleSlackEvent(h.worker, data.webhookEventId!);
+      else if (job.name === 'slack.respond') await h.slack.respond(data.responseUrl!, data.text!);
+      else ran.pop();
+    }
+  }
+  return ran;
+}

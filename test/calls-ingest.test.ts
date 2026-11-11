@@ -214,7 +214,7 @@ describe('deletion at the source and retention', () => {
     expect(copy).toMatchObject({ text: null, title: 'Acme weekly sync' });
     expect(copy!.purgedAt).toBeInstanceOf(Date);
     const run = await pool.query<{ summary: string; ok: boolean }>(`SELECT summary, ok FROM runs WHERE pipeline = 'retention.purge'`);
-    expect(run.rows).toEqual([{ summary: '1 transcript purged', ok: true }]);
+    expect(run.rows).toEqual([{ summary: '1 transcript purged, 0 Slack messages cleared', ok: true }]);
   });
 });
 

@@ -40,6 +40,6 @@ export async function purgeInbox(pool: Pool): Promise<string> {
     await tx.query(`DELETE FROM slack_drop_counts WHERE day < current_date - 90`);
     await tx.query(`DELETE FROM slack_names WHERE fetched_at <= now() - interval '30 days'`);
     const n = messages.rowCount ?? 0;
-    return `${n} Slack message${n === 1 ? '' : 's'} cleared.`;
+    return `${n} Slack message${n === 1 ? '' : 's'} cleared`;
   });
 }

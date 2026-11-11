@@ -81,6 +81,21 @@ describe('settings', () => {
       'ai.sales.ask_confidence': 0.5,
       'ai.sales.daily_budget_usd': 0,
       'ai.sales.monthly_budget_usd': 0,
+      'inbox.enabled': false,
+      'inbox.settle_seconds': 180,
+      'inbox.digest_only': false,
+      'inbox.quiet_hours': '19:00-07:00',
+      'inbox.quiet_tz': 'America/Chicago',
+      'inbox.unanalysed_after_minutes': 30,
+      'inbox.retention_days': 14,
+      'inbox.agent_enabled': true,
+      'inbox.email_address': '',
+      'inbox.email_senders': '@slack.com, @slack-mail.com',
+      'ai.inbox.enabled': true,
+      'ai.inbox.model_triage': 'claude-haiku-5-5',
+      'ai.inbox.model_recommend': 'claude-sonnet-5-5',
+      'ai.inbox.daily_budget_usd': 5,
+      'ai.inbox.monthly_budget_usd': 60,
     });
   });
 

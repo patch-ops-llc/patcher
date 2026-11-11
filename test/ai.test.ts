@@ -9,6 +9,8 @@ import { CALL_BRIEF_TASK } from '../src/calls/brief.js';
 import { MATCH_TASK } from '../src/calls/match.js';
 import { SUGGEST_TASK } from '../src/calls/suggest.js';
 import { BRIEF_TASK } from '../src/fix/brief.js';
+import { RECOMMEND_TASK } from '../src/inbox/recommend.js';
+import { TRIAGE_TASK } from '../src/inbox/triage.js';
 import { BRIEF_TASK as DEAL_BRIEF_TASK } from '../src/sales/brief.js';
 import { CLASSIFY_TASK } from '../src/sales/classify.js';
 import { DRAFT_TASK } from '../src/sales/draft.js';
@@ -248,6 +250,8 @@ describe('prompts', () => {
       'deal-brief': DEAL_BRIEF_TASK.tool.name,
       'proposal-draft': DRAFT_TASK.tool.name,
       'proposal-check': CHECK_TASK.tool.name,
+      'slack-triage': TRIAGE_TASK.tool.name,
+      'slack-recommend': RECOMMEND_TASK.tool.name,
     };
     for (const prompt of prompts) {
       expect(prompt.system, prompt.task).toContain(tools[prompt.task]!);
