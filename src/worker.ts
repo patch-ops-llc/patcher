@@ -8,8 +8,9 @@ import { createFathomSource } from './calls/sources/fathom.js';
 import { ConfigError, loadWorkerConfig } from './config.js';
 import { createCursorClient } from './cursor/client.js';
 import { createPool } from './db/pool.js';
-import { createRepoAdapter } from './dealroom/adapter.js';
+import { createRepoAdapter, createServiceAdapter } from './dealroom/adapter.js';
 import { createDealRoomRepo } from './dealroom/github.js';
+import { createDealRoomService } from './dealroom/service.js';
 import { registerFixCatalog } from './fix/agentFix.js';
 import { createGitHubClient, parseGitHubPrivateKey } from './github/client.js';
 import { registerInboxCatalog } from './inbox/catalog.js';
@@ -93,6 +94,10 @@ async function main(): Promise<void> {
     dealRoom: config.dealRoom
       ? createRepoAdapter(createDealRoomRepo({ ...config.dealRoom, ...(config.dealRoomApiUrl ? { baseUrl: config.dealRoomApiUrl } : {}) }))
       : null,
+    // The deal room's service API. The token is read here and nowhere else; `web` is never given it.
+    dealRoomApi: config.dealRoomServiceToken
+      ? createServiceAdapter(createDealRoomService({ token: config.dealRoomServiceToken, allowLocalHttp: !config.isProduction }))
+      : null,
     // Given the reader's token per call. It has read methods only, and `auth.revoke`.
     slackReader: (token) => createSlackReader({ token, apiUrl: config.slackApiUrl }),
     status: {
@@ -101,6 +106,7 @@ async function main(): Promise<void> {
       cursor: config.features.cursor,
       anthropic: config.features.anthropic,
       dealroom: config.features.dealroom,
+      dealroom_api: config.features.dealroom_api,
     },
   };
   await recordConfigured(pool, integrations.status);
@@ -111,7 +117,7 @@ async function main(): Promise<void> {
     catalog: registerInboxCatalog(
       registerSalesCatalog(
         registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool }),
-        { pool, appBaseUrl: config.appBaseUrl, dealRoom: integrations.dealRoom },
+        { pool, appBaseUrl: config.appBaseUrl, dealRoom: integrations.dealRoom, dealRoomApi: integrations.dealRoomApi },
       ),
       { pool },
     ),

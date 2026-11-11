@@ -2,7 +2,7 @@ import type { SlackBlock, SlackClient, SlackView } from '../slack/client.js';
 import { clip } from '../slack/messages.js';
 import { getUser } from '../settings/users.js';
 import type { SalesDeps, SalesResult } from './actions.js';
-import { editProposal, maySell, notADeal, regenerate, setDealRoomSlug, setPenguin, setSalesCall, skipDealRoom } from './actions.js';
+import { editProposal, maySell, notADeal, regenerate, reofferDealRoom, setDealRoomSlug, setPenguin, setSalesCall, skipDealRoom } from './actions.js';
 import type { SalesView } from './delivery.js';
 import { SALES_ACTIONS, decodeSalesRef, loadSalesView } from './delivery.js';
 import { joinProposal, splitProposal } from './markdown.js';
@@ -11,7 +11,8 @@ import { penguinReasonText } from './penguin.js';
 /**
  * The buttons and modals of a sales call's message, handled in the public service like every
  * other Slack interaction. Approve and Retry are the shared loop's own buttons and never
- * reach this module; what is handled here changes the draft or the deal, not the outside.
+ * reach this module, and that includes Publish and "Write to live room", which are approvals
+ * of their own. What is handled here changes the draft or the deal, not the outside.
  */
 export const REVIEW_MODAL = 'sales_review_modal';
 export const REGENERATE_MODAL = 'sales_regenerate_modal';
@@ -146,7 +147,7 @@ export function slugModal(view: SalesView): SlackView {
         type: 'input',
         block_id: SLUG_BLOCK,
         label: { type: 'plain_text', text: clip(`The slug of the room for ${view.deal?.company ?? 'this deal'}`, 150) },
-        hint: { type: 'plain_text', text: 'The last part of the room\'s address, for example "northwind". Create the room in the deal room admin first.' },
+        hint: { type: 'plain_text', text: 'The last part of the room\'s address, for example "northwind".' },
         element: { type: 'plain_text_input', action_id: 'value', max_length: 63 },
       },
     ],
@@ -168,7 +169,7 @@ const SALES_ACTION_IDS: readonly string[] = Object.values(SALES_ACTIONS);
 export async function handleSalesAction(deps: SalesSlackDeps, click: SalesClick): Promise<boolean> {
   if (!SALES_ACTION_IDS.includes(click.actionId)) return false;
   // A link button: Slack opens the address itself and only reports the click.
-  if (click.actionId === SALES_ACTIONS.openPr) return true;
+  if (click.actionId === SALES_ACTIONS.openPr || click.actionId === SALES_ACTIONS.openRoom) return true;
   const ref = decodeSalesRef(click.value);
   if (!ref) return true;
   if (!(await getUser(deps.pool, click.actor))) {
@@ -192,6 +193,9 @@ export async function handleSalesAction(deps: SalesSlackDeps, click: SalesClick)
       return true;
     case SALES_ACTIONS.retry:
       await report(await regenerate(deps, input));
+      return true;
+    case SALES_ACTIONS.reoffer:
+      await report(await reofferDealRoom(deps, input));
       return true;
     default:
       break;

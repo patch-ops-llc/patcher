@@ -4,6 +4,7 @@ import { recordAudit } from '../audit/auditLog.js';
 import type { Pool, Queryable } from '../db/pool.js';
 import { withTx } from '../db/pool.js';
 import { TIER_MODELS } from '../ai/models.js';
+import { DEALROOM_ROUTES, parseRoomOrigin } from '../dealroom/origin.js';
 
 const modelId = z
   .string()
@@ -216,6 +217,31 @@ export const settingDefs = {
       .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'Write the repository as owner/name.'),
     default: 'patch-ops-llc/penguin-dealroom',
     label: 'Repository of the Penguin deal room, where content pull requests are opened',
+  },
+  'sales.dealroom_route': {
+    schema: z.enum(DEALROOM_ROUTES),
+    default: 'pull_request',
+    label: 'How an approved Penguin proposal reaches the deal room',
+  },
+  'sales.dealroom_url': {
+    schema: z
+      .string()
+      .trim()
+      .max(200)
+      .transform((value, ctx) => {
+        if (!value) return '';
+        const parsed = parseRoomOrigin(value, { allowLocalHttp: true });
+        if (parsed.ok) return parsed.origin;
+        ctx.addIssue({ code: 'custom', message: parsed.reason });
+        return z.NEVER;
+      }),
+    default: '',
+    label: 'Address of the deal room, for its service API (for example https://dealroom.example)',
+  },
+  'sales.dealroom_publish': {
+    schema: z.boolean(),
+    default: false,
+    label: 'Offer Publish for a draft deal room, and writing to a room that is already live, each as its own approval (off: Patcher never changes a room\'s status and never writes to a live room)',
   },
   'sales.currency': {
     schema: z

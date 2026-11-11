@@ -1,3 +1,6 @@
+import type { RoomChange } from '../dealroom/plan.js';
+import type { RoomStatus } from '../dealroom/service.js';
+
 /** What kind of conversation a call was (design 6.1). The two sales types start the proposal pipeline. */
 export const CALL_TYPES = ['sales_discovery', 'sales_followup', 'client_delivery', 'internal', 'other'] as const;
 export type CallType = (typeof CALL_TYPES)[number];
@@ -15,6 +18,8 @@ export const isSalesType = (value: unknown): boolean => value === 'sales_discove
 
 export const SALES_CARRIER = 'sales_call';
 export const PROPOSAL_KIND = 'proposal';
+/** Publishing a draft room, and writing to a room that is live or holds a person's edits. Its own kind, so the owner can say who may. */
+export const DEALROOM_KIND = 'dealroom_publish';
 
 export type PenguinReason = 'host' | 'attendee' | 'flagged';
 
@@ -276,7 +281,31 @@ export interface CatalogItem {
 }
 
 export type DealRoomRoute = 'pull_request' | 'api';
-export type DealRoomStatus = 'prepared' | 'pr_open' | 'draft_written' | 'published' | 'merged' | 'closed' | 'failed';
+/**
+ * prepared, pr_open, merged, closed: the pull request route. On the service API route:
+ * draft_written (in a draft room, which clients cannot open), held (approved, and waiting in
+ * Patcher because the room is live or holds a person's edits), published (the room is live
+ * with this content), closed (the room is gone). failed: either route.
+ */
+export type DealRoomStatus = 'prepared' | 'pr_open' | 'draft_written' | 'held' | 'published' | 'merged' | 'closed' | 'failed';
+
+/** What the deal room said about a room when Patcher last read it. Counts only: no names, no addresses. */
+export interface RoomSnapshot {
+  status: RoomStatus;
+  slug: string;
+  members: number;
+  invites: number;
+  domains: number;
+}
+
+/** Why approved files are waiting in Patcher, and what a person is asked to confirm. */
+export interface RoomHold {
+  /** live: the room is not a draft. edited: a person's text in the room would be replaced or removed. */
+  reasons: ('live' | 'edited')[];
+  planHash: string;
+  replaces: string[];
+  removes: string[];
+}
 
 export interface DealRoomUpdate {
   id: string;
@@ -294,6 +323,13 @@ export interface DealRoomUpdate {
   status: DealRoomStatus;
   error: string | null;
   recommendationId: string | null;
+  /** The service API route: the address, the room, and what the write did or would do. */
+  origin: string | null;
+  roomId: string | null;
+  roomUrl: string | null;
+  room: RoomSnapshot | null;
+  hold: RoomHold | null;
+  changes: RoomChange[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -314,6 +350,12 @@ export interface DealRoomUpdateRow {
   status: DealRoomStatus;
   error: string | null;
   recommendation_id: string | null;
+  origin: string | null;
+  room_id: string | null;
+  room_url: string | null;
+  room: RoomSnapshot | null;
+  hold: RoomHold | null;
+  changes: RoomChange[] | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -334,6 +376,12 @@ export const updateFromRow = (r: DealRoomUpdateRow): DealRoomUpdate => ({
   status: r.status,
   error: r.error,
   recommendationId: r.recommendation_id,
+  origin: r.origin,
+  roomId: r.room_id,
+  roomUrl: r.room_url,
+  room: r.room,
+  hold: r.hold,
+  changes: r.changes ?? [],
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });

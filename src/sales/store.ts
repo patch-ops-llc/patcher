@@ -95,19 +95,20 @@ export interface DealListItem extends Deal {
   proposalStatus: Proposal['status'] | null;
   updateStatus: DealRoomUpdate['status'] | null;
   prUrl: string | null;
+  roomUrl: string | null;
   calls: number;
 }
 
 export async function listDeals(db: Queryable, limit = 200): Promise<DealListItem[]> {
   const { rows } = await db.query<
-    DealRow & { proposal_id: string | null; proposal_version: number | null; proposal_status: Proposal['status'] | null; update_status: DealRoomUpdate['status'] | null; pr_url: string | null; calls: string }
+    DealRow & { proposal_id: string | null; proposal_version: number | null; proposal_status: Proposal['status'] | null; update_status: DealRoomUpdate['status'] | null; pr_url: string | null; room_url: string | null; calls: string }
   >(
     `SELECT d.*, p.id AS proposal_id, p.version AS proposal_version, p.status AS proposal_status,
-            u.status AS update_status, u.pr_url,
+            u.status AS update_status, u.pr_url, u.room_url,
             (SELECT count(*) FROM sales_calls s WHERE s.deal_id = d.id) AS calls
        FROM deals d
        LEFT JOIN LATERAL (SELECT id, version, status FROM proposals WHERE deal_id = d.id ORDER BY version DESC LIMIT 1) p ON true
-       LEFT JOIN LATERAL (SELECT status, pr_url FROM deal_room_updates WHERE deal_id = d.id ORDER BY created_at DESC LIMIT 1) u ON true
+       LEFT JOIN LATERAL (SELECT status, pr_url, room_url FROM deal_room_updates WHERE deal_id = d.id ORDER BY created_at DESC LIMIT 1) u ON true
       ORDER BY d.updated_at DESC
       LIMIT $1`,
     [limit],
@@ -119,6 +120,7 @@ export async function listDeals(db: Queryable, limit = 200): Promise<DealListIte
     proposalStatus: r.proposal_status,
     updateStatus: r.update_status,
     prUrl: r.pr_url,
+    roomUrl: r.room_url,
     calls: Number(r.calls),
   }));
 }
@@ -251,6 +253,26 @@ export async function offerFor(db: Queryable, proposalId: string): Promise<Recom
     [SALES_CARRIER, proposalId],
   );
   return rows[0] ? recommendationFromRow(rows[0]) : null;
+}
+
+/** The newest approval that followed a deal room update: writing files that were held, or publishing the draft room. */
+export async function followUpFor(db: Queryable, updateId: string): Promise<Recommendation | null> {
+  const { rows } = await db.query<RecommendationRow>(
+    `SELECT * FROM recommendations WHERE carrier_type = $1 AND source_type = 'deal_room_update' AND source_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [SALES_CARRIER, updateId],
+  );
+  return rows[0] ? recommendationFromRow(rows[0]) : null;
+}
+
+/** Withdraws one recommendation that is waiting or failed, because what it would do no longer fits the room. */
+export async function withdrawRecommendation(tx: Queryable, id: string, options: { reason: string; actor: Actor }): Promise<boolean> {
+  const { rowCount } = await tx.query(
+    `UPDATE recommendations SET status = 'expired', last_error = $2, updated_at = now() WHERE id = $1 AND status IN ('drafted', 'posted', 'failed')`,
+    [id, options.reason],
+  );
+  if (!rowCount) return false;
+  await recordAudit(tx, { actor: options.actor, action: 'recommendation.expire', target: id, after: { status: 'expired', reason: options.reason } });
+  return true;
 }
 
 /** Closes what a sales call still has waiting for a decision. What was approved stays as it is. */

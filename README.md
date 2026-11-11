@@ -277,19 +277,50 @@ calls.analyze ─▶ seam (src/calls/seam.ts) ─▶ sales.classify
   transcript carries no addresses, so the rule cannot be tested and the message asks. A
   person's mark on the deal (Penguin or not) overrides the rule in both directions and is
   not changed by later calls.
-- **The deal room** (`src/dealroom/`). For a Penguin deal a person says which room it is
-  (its slug). On approval, the proposal is cut at its headings into the room's layout,
-  `content/<slug>/proposal/NN-name.md` each with a `title:` line and an `overview.md` when
-  the room has none, checked against the renderer's rules (no images, no raw HTML, safe
-  links, tables turned into lists), and opened as one pull request on a new `patcher/…`
-  branch. The pull request lists what a person still has to do by hand. `dealroom.sync`
-  reads its state every 30 minutes, so the Slack message says when it was merged or closed.
+- **The deal room** (`src/dealroom/`). The approved proposal is cut at its headings into
+  the room's layout, `proposal/NN-name.md` each with a `title:` line and an `overview.md`,
+  and checked against the renderer's rules (no images, no raw HTML, safe links, tables
+  turned into lists). It reaches the room by one of two routes, chosen in **Settings →
+  Sales**. Nothing goes to the deal room on either route before the proposal is approved.
+- **Route 1, a content pull request** (the default). A person says which room it is (its
+  slug). On approval the files are opened as one pull request under `content/<slug>/` on a
+  new `patcher/…` branch. The pull request lists what a person still has to do by hand.
+  `dealroom.sync` reads its state every 30 minutes, so the Slack message says when it was
+  merged or closed.
 - **What the deal room client can do** (`src/dealroom/github.ts`). It has its own GitHub
   App, separate from the read-only one. Its token is asked for one repository with
   contents and pull request write. It refuses any path outside `content/<slug>/`, creates
   a branch and never updates an existing ref, and has no merge, close or delete request.
   Protect `main` on the deal room repository as well: the client holds to this in code,
   and branch protection makes GitHub hold to it too.
+- **Route 2, the deal room's service API** (`src/dealroom/service.ts`, `plan.ts` and the
+  second adapter in `adapter.ts`). On approval (`sales.write_dealroom`) the worker finds
+  the room by Patcher's own reference, `patcher:deal:<deal id>`, or creates it as a draft,
+  and writes the files in one request. It writes only into a room that is a **draft** and
+  holds no file a person edited. A room that is live, closed or archived, or a draft with
+  a person's edits, is left untouched: the proposal is final and the files wait, with a
+  per-file list of what writing would change on the proposal's page.
+- **Two more approvals, each for one deal** (kind `dealroom_publish`, so the owner can say
+  who may give them). `sales.confirm_dealroom_write` writes files that were held; it is the
+  only action that can send the API's `confirmLive`, and only while the room has the status
+  and the number of members, invites and allowed domains its approver was shown.
+  `sales.publish_dealroom` sets a draft room to active, and is the only action that sends a
+  status. A room that changed since the question was put is not acted on; Patcher asks
+  again with what it found.
+- **The publish setting** (**Settings → Sales**, off to start). While it is off, Publish is
+  not offered, writing to a room that is not a draft is not offered, both actions refuse to
+  run, and so Patcher never changes a room's status and never sends `confirmLive`. A person
+  publishes in the deal room admin, and `dealroom.sync` notices.
+- **What the service API client can do.** The six routes under `/api/service/deals` and
+  nothing else. The token is the worker variable `DEALROOM_API_TOKEN`; `web` never has it
+  and refuses to start in production if it is set there. It is sent as a bearer header to
+  the address saved in Settings, which must be a plain `https` origin, and only when that
+  is the address the approver was shown. Redirects are not followed. Members' addresses
+  and domain names in the API's answers are dropped on arrival (counts are kept), and the
+  token is scrubbed from anything the app answers before it is stored or shown.
+- **A room made by hand** is linked to a deal only when a person saved its slug on the deal
+  in Patcher and the room has no reference yet. Linking sets the reference and nothing
+  else. Patcher never picks a room by its name.
 - **What a model sees.** The redacted transcript and attendee names with e-mail domains for
   the type and the brief; the brief, the template and the catalog without prices for the
   draft; the brief and the draft for the check. Never an address, a key or a price.
@@ -299,10 +330,9 @@ calls.analyze ─▶ seam (src/calls/seam.ts) ─▶ sales.classify
 - **Deleted at the source.** When a call's only recording is deleted, its open offer is
   closed, the brief's quotes are blanked and a draft nobody approved is emptied.
 
-The deal room's service API (creating a deal, writing content without a redeploy) is the
-next phase. It is a second `DealRoomAdapter` (`src/dealroom/adapter.ts`), chosen where
-`src/worker.ts` builds `integrations.dealRoom`; `deal_room_updates.route` and
-`deals.deal_room_ref` are already there for it.
+The service API route was built against the API's written contract and tested against a
+stand-in made from it (`test/fixtures/dealroom.ts`). It has not been run against the real
+deal room.
 
 ## The Slack reader
 
@@ -412,8 +442,9 @@ src/
   calls/                            call transcripts: sources, connections, ingestion, matching,
                                     suggestions, the Slack message, and the seam for the sales phase
   cursor/                           Cursor Cloud Agents client
-  dealroom/                         the deal room: the proposal as its content files, the client that
-                                    can only open a pull request under content/<slug>/, the adapter
+  dealroom/                         the deal room: the proposal as its content files; the client that
+                                    can only open a pull request under content/<slug>/; the service
+                                    API client, the write plan, and the adapter for each route
   db/                               pool, transactions, migration runner
   fix/                              "Fix via agent": the action, its brief, the agent poll
   github/                           read-only GitHub App client
@@ -453,7 +484,7 @@ test/                               vitest, against a real Postgres
 | A webhook from another system | As `/webhooks/:source/:token` in `src/web/app.ts` does: check, store in `webhook_events`, enqueue, acknowledge |
 | A transcript source | A `TranscriptSource` in `src/calls/sources/`, added to `integrations.transcripts` in `src/worker.ts` |
 | Something that reads every analysed call | `onCallAnalysed` in `src/calls/seam.ts`. It can run twice for one call, so make it safe to repeat |
-| Another way to reach the deal room | A `DealRoomAdapter` in `src/dealroom/adapter.ts`, chosen in `src/worker.ts` |
+| Another way to reach the deal room | An adapter in `src/dealroom/adapter.ts`, built in `src/worker.ts`, a value in `DEALROOM_ROUTES`, and its action in `src/sales/catalog.ts` |
 | Another way to capture Slack messages | A caller of `receiveCaptured` in `src/inbox/capture.ts`: authenticate the sender, find the workspace, hand over a `CapturedMessage`. The forwarded-mail route in `src/inbox/email.ts` is the pattern |
 | Another inbound-mail service | An `InboundProvider` in `src/inbox/email.ts`, chosen in `src/web.ts` |
 | A message that carries several recommendations | A carrier in `src/recommendations/carriers.ts`, as the audit report does in `src/weekly/delivery.ts` |
@@ -497,7 +528,7 @@ SLACK_OIDC_URL=http://localhost:4010
 The fake does not play the reader's authorisation (`oauth.v2.access`) or send message
 events, so the Slack reader is exercised by the tests, not by a local run.
 
-Without `RAILWAY_API_TOKEN`, `CURSOR_API_KEY`, `ANTHROPIC_API_KEY`, the `GITHUB_APP_*` and the
+Without `RAILWAY_API_TOKEN`, `CURSOR_API_KEY`, `ANTHROPIC_API_KEY`, `DEALROOM_API_TOKEN`, the `GITHUB_APP_*` and the
 `DEALROOM_GITHUB_APP_*` variables the worker starts, logs each as not configured, and the **Audits** screen says
 which variables are missing. Connecting a call source also needs the token key pair
 (`TOKEN_PUBLIC_KEY` on web, `TOKEN_PRIVATE_KEY` on worker); the setup checklist has the
@@ -547,5 +578,8 @@ The test run rebuilds the test database from `migrations/` each time.
 - A proposal carries no price a model wrote. Prices come from the rate card, in code.
 - The deal room repository is written only as a pull request under `content/<slug>/`, only
   after approval. Nothing merges it and nothing pushes to its default branch.
+- The deal room's service API is called only after an approval. A room's status is changed,
+  and `confirmLive` is sent, only by an approval given for that one deal, and never while
+  the publish setting is off.
 - An agent is started only on a repository linked in the registry, only after approval, and
   nothing merges its pull request.

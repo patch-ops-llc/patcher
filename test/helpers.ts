@@ -193,12 +193,14 @@ export function testIntegrations(overrides: Partial<Integrations> = {}): Integra
   const cursor = overrides.cursor ?? null;
   const model = overrides.model ?? null;
   const dealRoom = overrides.dealRoom ?? null;
+  const dealRoomApi = overrides.dealRoomApi ?? null;
   return {
     railway,
     github,
     cursor,
     model,
     dealRoom,
+    dealRoomApi,
     slackReader: overrides.slackReader ?? (() => {
       throw new Error('no Slack reader in this test');
     }),
@@ -212,6 +214,7 @@ export function testIntegrations(overrides: Partial<Integrations> = {}): Integra
       dealroom: dealRoom
         ? CONFIGURED
         : { configured: false, missing: ['DEALROOM_GITHUB_APP_ID', 'DEALROOM_GITHUB_APP_PRIVATE_KEY', 'DEALROOM_GITHUB_APP_INSTALLATION_ID'] },
+      dealroom_api: dealRoomApi ? CONFIGURED : { configured: false, missing: ['DEALROOM_API_TOKEN'] },
     },
   };
 }
@@ -225,6 +228,7 @@ export function harness(pool: Pool, overrides: Partial<WorkerDeps> = {}): Harnes
       pool,
       appBaseUrl: BASE_URL,
       dealRoom: integrations.dealRoom,
+      dealRoomApi: integrations.dealRoomApi,
     }),
     { pool },
   );
