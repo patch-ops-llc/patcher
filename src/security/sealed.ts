@@ -76,6 +76,24 @@ export function open(privateKey: KeyObject, sealed: string): string {
   }
 }
 
+/** Seals and opens run-time secrets. Only the worker can be given one, since opening needs the private key. */
+export interface SecretBox {
+  seal(plaintext: string): string;
+  open(sealed: string): string;
+}
+
+/**
+ * The worker's box. It can also seal, with the public half derived from its own key, for
+ * the secrets it receives itself (a webhook secret a vendor returns to it).
+ */
+export function secretBox(privateKey: KeyObject): SecretBox {
+  const publicKey = createPublicKey(privateKey);
+  return {
+    seal: (plaintext) => seal(publicKey, plaintext),
+    open: (sealed) => open(privateKey, sealed),
+  };
+}
+
 export function generateTokenKeyPair(): { publicKey: string; privateKey: string } {
   const pair = generateKeyPairSync('rsa', { modulusLength: 3072 });
   return {

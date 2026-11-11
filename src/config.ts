@@ -53,6 +53,8 @@ const workerSchema = baseSchema.extend({
   CURSOR_API_URL: optional(z.string().url()),
   GITHUB_API_URL: optional(z.string().url()),
   ANTHROPIC_API_URL: optional(z.string().url()),
+  CALENDLY_API_URL: optional(z.string().url()),
+  FATHOM_API_URL: optional(z.string().url()),
 });
 
 export class ConfigError extends Error {}
@@ -140,9 +142,16 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = parse(workerSchema, env);
   if (
     parsed.NODE_ENV === 'production' &&
-    (parsed.RAILWAY_API_URL || parsed.CURSOR_API_URL || parsed.GITHUB_API_URL || parsed.ANTHROPIC_API_URL)
+    (parsed.RAILWAY_API_URL ||
+      parsed.CURSOR_API_URL ||
+      parsed.GITHUB_API_URL ||
+      parsed.ANTHROPIC_API_URL ||
+      parsed.CALENDLY_API_URL ||
+      parsed.FATHOM_API_URL)
   ) {
-    throw new ConfigError('RAILWAY_API_URL, CURSOR_API_URL, GITHUB_API_URL and ANTHROPIC_API_URL must not be set in production');
+    throw new ConfigError(
+      'RAILWAY_API_URL, CURSOR_API_URL, GITHUB_API_URL, ANTHROPIC_API_URL, CALENDLY_API_URL and FATHOM_API_URL must not be set in production',
+    );
   }
   const base = common(parsed);
   const githubVars = {
@@ -169,6 +178,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
     githubApiUrl: parsed.GITHUB_API_URL,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY,
     anthropicApiUrl: parsed.ANTHROPIC_API_URL,
+    calendlyApiUrl: parsed.CALENDLY_API_URL,
+    fathomApiUrl: parsed.FATHOM_API_URL,
     features: {
       /** Posting, editing messages, the channel list and the App Home tab. */
       slackApi: feature({

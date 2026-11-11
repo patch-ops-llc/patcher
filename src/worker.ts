@@ -1,6 +1,10 @@
 import http from 'node:http';
 import { createAnthropicClient } from './ai/client.js';
 import { loadAllPrompts } from './ai/prompts.js';
+import { registerCallCatalog } from './calls/catalog.js';
+import { callCarrier } from './calls/delivery.js';
+import { createCalendlySource } from './calls/sources/calendly.js';
+import { createFathomSource } from './calls/sources/fathom.js';
 import { ConfigError, loadWorkerConfig } from './config.js';
 import { createCursorClient } from './cursor/client.js';
 import { createPool } from './db/pool.js';
@@ -14,7 +18,7 @@ import { createRailwayClient } from './railway/client.js';
 import { Carriers } from './recommendations/carriers.js';
 import { createCatalog } from './recommendations/catalog.js';
 import { Scheduler } from './scheduler/scheduler.js';
-import { loadPrivateKey } from './security/sealed.js';
+import { loadPrivateKey, secretBox } from './security/sealed.js';
 import { createSlackClient, unconfiguredSlackClient } from './slack/client.js';
 import { auditCarrier } from './weekly/delivery.js';
 import type { Integrations, WorkerDeps } from './worker/deps.js';
@@ -27,7 +31,8 @@ import { registerHandlers } from './worker/handlers.js';
 async function main(): Promise<void> {
   const config = loadWorkerConfig();
   const log = createLogger(config.logLevel, { service: 'worker' });
-  if (config.tokenPrivateKey) loadPrivateKey(config.tokenPrivateKey);
+  // Opens the Calendly and Fathom keys added in the UI. Without it they stay sealed and unused.
+  const secrets = config.tokenPrivateKey ? secretBox(loadPrivateKey(config.tokenPrivateKey)) : null;
   if (config.github) {
     try {
       parseGitHubPrivateKey(config.github.privateKey);
@@ -65,6 +70,10 @@ async function main(): Promise<void> {
       ? createAnthropicClient({ apiKey: config.anthropicApiKey, baseUrl: config.anthropicApiUrl })
       : null,
     probe: createProber(),
+    transcripts: {
+      calendly: createCalendlySource(config.calendlyApiUrl ? { baseUrl: config.calendlyApiUrl } : {}),
+      fathom: createFathomSource(config.fathomApiUrl ? { baseUrl: config.fathomApiUrl } : {}),
+    },
     status: {
       railway: config.features.railway,
       github: config.features.github,
@@ -77,9 +86,10 @@ async function main(): Promise<void> {
   const deps: WorkerDeps = {
     pool,
     queue,
-    catalog: registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }),
-    carriers: new Carriers().register(auditCarrier),
+    catalog: registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool }),
+    carriers: new Carriers().register(auditCarrier).register(callCarrier),
     integrations,
+    secrets,
     slack: config.slackBotToken
       ? createSlackClient({ token: config.slackBotToken, apiUrl: config.slackApiUrl })
       : unconfiguredSlackClient(),

@@ -37,6 +37,22 @@ export const jobSchemas = {
   'audit.report.post': z.strictObject({ runId: id }),
   /** Ask Cursor how an agent started by an approved fix is doing. */
   'agent.poll': z.strictObject({ agentRunId: id }),
+  /** Check a newly connected Calendly token or Fathom key and register its webhook. */
+  'calls.connection.setup': z.strictObject({ connectionId: id }),
+  /** Remove a connection's webhook at the vendor and forget its key. */
+  'calls.connection.remove': z.strictObject({ connectionId: id, requestedBy: z.string() }),
+  /** Ask one connection for the calls since its watermark. */
+  'calls.poll': z.strictObject({ connectionId: id }),
+  /** Verify and handle a stored Calendly or Fathom webhook. */
+  'calls.webhook': z.strictObject({ webhookEventId: z.string().regex(/^\d+$/) }),
+  /** Match a call to a project. */
+  'calls.analyze': z.strictObject({ callId: id }),
+  /** Draft the suggested changes for a matched call. */
+  'calls.suggest': z.strictObject({ callId: id }),
+  /** Post or update the one Slack message for a call. */
+  'calls.post': z.strictObject({ callId: id }),
+  /** Post a call's quotes and briefs in its thread. */
+  'calls.details': z.strictObject({ callId: id }),
   /** After a resume: pick up what waited while paused. */
   'system.resume': z.strictObject({ requestedBy: z.string() }),
 } as const;

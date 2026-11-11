@@ -1,3 +1,7 @@
+import { analyzeCall, resumeWaitingCalls, suggestForCall } from '../calls/analyze.js';
+import { handleWebhook, pollAll, pollConnection, removeConnection, setupConnection } from '../calls/connections.js';
+import { postCall, postCallDetails, resumeHeldCallPosts } from '../calls/delivery.js';
+import { purgeTranscripts } from '../calls/ingest.js';
 import { pollAgentRun } from '../fix/agentFix.js';
 import { runProbes } from '../probes/run.js';
 import type { JobQueue } from '../queue/queue.js';
@@ -32,6 +36,13 @@ export const scheduleHandlers: Record<string, ScheduleHandler> = {
     return 'Audit started.';
   },
   'probe.health': (deps) => runProbes(deps),
+  // The catch-up for missed webhooks, and the moment calls that were waiting are looked at again.
+  'transcripts.poll': async (deps) => {
+    const resumed = await resumeWaitingCalls(deps);
+    const polled = await pollAll(deps);
+    return resumed ? `${polled} ${resumed} waiting ${resumed === 1 ? 'call' : 'calls'} picked up again.` : polled;
+  },
+  'retention.purge': (deps) => purgeTranscripts(deps.pool),
 };
 
 export async function runSchedule(
@@ -145,7 +156,9 @@ export async function registerHandlers(queue: JobQueue, deps: WorkerDeps): Promi
     if (await isPaused(deps.pool)) return;
     const resumed = await resumeHeld(deps);
     const reports = await resumeHeldReports(deps);
-    deps.log.info('resumed held work', { ...resumed, auditReports: reports });
+    const callPosts = await resumeHeldCallPosts(deps);
+    const calls = await resumeWaitingCalls(deps);
+    deps.log.info('resumed held work', { ...resumed, auditReports: reports, callPosts, calls });
   });
   await queue.work('audit.run', async (data) => {
     const started = new Date();
@@ -179,6 +192,36 @@ export async function registerHandlers(queue: JobQueue, deps: WorkerDeps): Promi
     const outcome = await pollAgentRun(deps, data.agentRunId);
     deps.log.debug('agent poll', { agentRunId: data.agentRunId, outcome });
   });
+
+  await queue.work('calls.connection.setup', async (data) => {
+    const outcome = await setupConnection(deps, data.connectionId);
+    deps.log.info('call source setup', { connectionId: data.connectionId, outcome });
+  });
+  await queue.work('calls.connection.remove', async (data) => {
+    const removed = await removeConnection(deps, data.connectionId, data.requestedBy);
+    deps.log.info('call source removed', { connectionId: data.connectionId, removed });
+  });
+  await queue.work('calls.poll', async (data) => {
+    const result = await pollConnection(deps, data.connectionId);
+    deps.log.info('call source poll', { connectionId: data.connectionId, ...result });
+  });
+  await queue.work('calls.webhook', async (data) => {
+    const outcome = await handleWebhook(deps, data.webhookEventId);
+    deps.log.info('call webhook', { webhookEventId: data.webhookEventId, outcome });
+  });
+  await queue.work('calls.analyze', async (data) => {
+    const outcome = await analyzeCall(deps, data.callId);
+    deps.log.info('call analysis', { callId: data.callId, outcome });
+  });
+  await queue.work('calls.suggest', async (data) => {
+    const outcome = await suggestForCall(deps, data.callId);
+    deps.log.info('call suggestions', { callId: data.callId, outcome });
+  });
+  await queue.work('calls.post', async (data) => {
+    const outcome = await postCall(deps, data.callId);
+    deps.log.info('call post', { callId: data.callId, outcome });
+  });
+  await queue.work('calls.details', (data) => postCallDetails(deps, data.callId));
 
   await queue.onDeadLetter(async (dead) => {
     deps.log.error('job dead-lettered', { queue: dead.queue, jobId: dead.jobId, error: dead.error });

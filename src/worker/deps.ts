@@ -7,8 +7,11 @@ import type { ModelClient } from '../ai/client.js';
 import type { FeatureStatus } from '../config.js';
 import type { CursorClient } from '../cursor/client.js';
 import type { GitHubClient } from '../github/client.js';
+import type { TranscriptSource } from '../calls/sources/source.js';
+import type { Vendor } from '../calls/types.js';
 import type { Prober } from '../probes/probe.js';
 import type { RailwayReader } from '../railway/client.js';
+import type { SecretBox } from '../security/sealed.js';
 import type { SlackClient } from '../slack/client.js';
 
 /**
@@ -22,6 +25,11 @@ export interface Integrations {
   /** The model provider. It drafts and classifies; it is given no other client and no credential. */
   model: ModelClient | null;
   probe: Prober;
+  /**
+   * The Calendly and Fathom adapters. They hold no key: each call is given the key of the
+   * connection it is for, opened from the database.
+   */
+  transcripts: Record<Vendor, TranscriptSource>;
   status: { railway: FeatureStatus; github: FeatureStatus; cursor: FeatureStatus; anthropic: FeatureStatus };
 }
 
@@ -40,4 +48,6 @@ export interface WorkerDeps {
   /** `DRY_RUN=1` in the environment, which forces dry run whatever the UI switch says. */
   dryRunEnv: boolean;
   integrations: Integrations;
+  /** Opens the keys added in the UI. Null until `TOKEN_PRIVATE_KEY` is set. */
+  secrets: SecretBox | null;
 }

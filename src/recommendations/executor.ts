@@ -2,10 +2,10 @@ import { recordAudit, SYSTEM_ACTOR } from '../audit/auditLog.js';
 import { withTx } from '../db/pool.js';
 import { getSetting, isDryRun } from '../settings/settings.js';
 import { SlackApiError } from '../slack/client.js';
-import { clip, outcomeReply } from '../slack/messages.js';
+import { clip, escapeMrkdwn, outcomeReply } from '../slack/messages.js';
 import type { WorkerDeps } from '../worker/deps.js';
 import type { ActionResult } from './catalog.js';
-import { renderRecommendation } from './delivery.js';
+import { renderRecommendation, threadPrefix } from './delivery.js';
 import { getRecommendation } from './service.js';
 import type { ActionRecord, ActionRow } from './types.js';
 import { actionFromRow } from './types.js';
@@ -105,8 +105,15 @@ async function finish(
   return actionFromRow(rows[0]!);
 }
 
+/** What the action wrote for a person to use, quoted under the outcome line. */
+function produced(action: ActionRecord, result?: ActionResult): string {
+  if (action.status !== 'done' || action.dryRun || !result?.detail) return '';
+  const lines = escapeMrkdwn(result.detail.trim().slice(0, 2500)).split('\n');
+  return `\n${lines.map((line) => `> ${line}`).join('\n')}`;
+}
+
 /** Edits the message to its one-line outcome and adds one thread reply. Runs once per action. */
-async function report(deps: WorkerDeps, action: ActionRecord, summary?: string): Promise<void> {
+async function report(deps: WorkerDeps, action: ActionRecord, result?: ActionResult): Promise<void> {
   if (action.reportedAt) return;
   const rec = await getRecommendation(deps.pool, action.recommendationId);
   if (rec?.slackChannel && rec.slackTs) {
@@ -115,7 +122,7 @@ async function report(deps: WorkerDeps, action: ActionRecord, summary?: string):
       await deps.slack.postMessage({
         channel: rec.slackChannel,
         threadTs: rec.slackTs,
-        text: outcomeReply(action, summary),
+        text: `${await threadPrefix(deps, rec)}${outcomeReply(action, result?.summary)}${produced(action, result)}`,
       });
     } catch (err) {
       if (!(err instanceof SlackApiError) || err.retryable) throw err;
@@ -190,6 +197,6 @@ async function runLocked(deps: WorkerDeps, actionId: string): Promise<ExecuteOut
   }
 
   const finished = await withTx(deps.pool, (tx) => finish(tx, action, outcome));
-  await report(deps, finished, outcome.ok ? outcome.result.summary : undefined);
+  await report(deps, finished, outcome.ok ? outcome.result : undefined);
   return outcome.ok ? 'done' : 'failed';
 }

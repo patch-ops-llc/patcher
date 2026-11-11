@@ -20,6 +20,8 @@ export interface ActionResult {
   externalRef?: string;
   /** One short line for the thread reply. */
   summary?: string;
+  /** Longer text the action produced for a person to use, such as a drafted message. Shown under the summary. */
+  detail?: string;
 }
 
 export interface ActionDefinition<P = unknown> {

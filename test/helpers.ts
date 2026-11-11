@@ -1,3 +1,5 @@
+import { registerCallCatalog } from '../src/calls/catalog.js';
+import { callCarrier } from '../src/calls/delivery.js';
 import type { Pool } from '../src/db/pool.js';
 import { createPool } from '../src/db/pool.js';
 import { registerFixCatalog } from '../src/fix/agentFix.js';
@@ -18,6 +20,7 @@ import { OidcError } from '../src/slack/oidc.js';
 import type { WebDeps } from '../src/web/deps.js';
 import { auditCarrier } from '../src/weekly/delivery.js';
 import type { Integrations, WorkerDeps } from '../src/worker/deps.js';
+import { FakeSource } from './fixtures/calls.js';
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? 'postgres://patcher:patcher@localhost:5432/patcher_test';
@@ -39,13 +42,16 @@ export async function resetDb(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE settings, channel_routes, slack_channels, schedules, users, sessions, recommendations,
              approvals, actions, webhook_events, runs, audit_log, projects, project_links, project_checks,
-             railway_inventory, probe_results, audit_runs, audit_findings, agent_runs, integrations, llm_calls
+             railway_inventory, probe_results, audit_runs, audit_findings, agent_runs, integrations, llm_calls,
+             transcript_connections, calls, transcripts, call_analyses, call_suggestions, project_tasks
              RESTART IDENTITY CASCADE`);
   await pool.query(`
     INSERT INTO schedules (key, cron_expr, tz) VALUES
       ('approvals.expire', '0 9 * * *', 'America/Chicago'),
       ('audit.weekly', '0 8 * * 1', 'America/Chicago'),
-      ('probe.health', '*/5 * * * *', 'America/Chicago')`);
+      ('probe.health', '*/5 * * * *', 'America/Chicago'),
+      ('transcripts.poll', '*/15 * * * *', 'America/Chicago'),
+      ('retention.purge', '30 3 * * *', 'America/Chicago')`);
   await pool.query('DELETE FROM pgboss.job');
 }
 
@@ -181,6 +187,7 @@ export function testIntegrations(overrides: Partial<Integrations> = {}): Integra
     cursor,
     model,
     probe: overrides.probe ?? (() => Promise.reject(new Error('no prober in this test'))),
+    transcripts: overrides.transcripts ?? { calendly: new FakeSource('calendly'), fathom: new FakeSource('fathom') },
     status: overrides.status ?? {
       railway: railway ? CONFIGURED : { configured: false, missing: ['RAILWAY_API_TOKEN'] },
       github: github ? CONFIGURED : { configured: false, missing: ['GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_INSTALLATION_ID'] },
@@ -194,13 +201,14 @@ export function harness(pool: Pool, overrides: Partial<WorkerDeps> = {}): Harnes
   const queue = new RecordingQueue();
   const slack = new FakeSlack();
   const integrations = overrides.integrations ?? testIntegrations();
-  const catalog = registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor });
+  const catalog = registerCallCatalog(registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }), { pool });
   const worker: WorkerDeps = {
     pool,
     queue,
     catalog,
-    carriers: new Carriers().register(auditCarrier),
+    carriers: new Carriers().register(auditCarrier).register(callCarrier),
     integrations,
+    secrets: null,
     slack,
     log: silentLogger,
     hubTeamId: HUB,
@@ -227,6 +235,7 @@ export function webDeps(h: Harness, overrides: Partial<WebDeps> = {}): WebDeps &
     oidc: new StubOidc(),
     modals: h.slack,
     features: { slackRequests: configured, slackModals: configured, signIn: configured },
+    seal: null,
     ...overrides,
   } as WebDeps & { oidc: StubOidc };
 }

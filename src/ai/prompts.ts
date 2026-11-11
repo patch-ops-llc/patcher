@@ -11,6 +11,9 @@ export const PROMPTS = {
   'audit-service': 'v1',
   'audit-rollup': 'v1',
   'fix-brief': 'v1',
+  'call-match': 'v1',
+  'call-suggestions': 'v1',
+  'call-brief': 'v1',
 } as const;
 
 export type PromptTask = keyof typeof PROMPTS;

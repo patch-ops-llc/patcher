@@ -9,7 +9,7 @@ import { withTx } from '../db/pool.js';
 import { markError, markOk } from '../integrations/status.js';
 import type { Enqueuer } from '../queue/queue.js';
 import type { Catalog } from '../recommendations/catalog.js';
-import { renderRecommendation } from '../recommendations/delivery.js';
+import { renderRecommendation, threadPrefix } from '../recommendations/delivery.js';
 import type { LoopDeps } from '../recommendations/service.js';
 import { createRecommendation, getRecommendation } from '../recommendations/service.js';
 import type { Recommendation } from '../recommendations/types.js';
@@ -337,7 +337,11 @@ export async function pollAgentRun(deps: WorkerDeps, agentRunId: string, now: Da
   const rec = await getRecommendation(deps.pool, run.recommendation_id);
   if (rec?.slackChannel && rec.slackTs) {
     try {
-      await deps.slack.postMessage({ channel: rec.slackChannel, threadTs: rec.slackTs, text: outcomeText(run) });
+      await deps.slack.postMessage({
+        channel: rec.slackChannel,
+        threadTs: rec.slackTs,
+        text: `${await threadPrefix(deps, rec)}${outcomeText(run)}`,
+      });
       await renderRecommendation(deps, rec);
     } catch (err) {
       if (!(err instanceof SlackApiError) || err.retryable) throw err;
