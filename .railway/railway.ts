@@ -69,6 +69,15 @@ export default defineRailway(() => {
       // Where links in Slack messages point. The worker has no public domain of its own.
       APP_BASE_URL: 'https://${{web.RAILWAY_PUBLIC_DOMAIN}}',
       TOKEN_PRIVATE_KEY: preserve(),
+      // The weekly audit. Only the worker holds these; see docs/setup-checklist.md.
+      RAILWAY_API_TOKEN: preserve(),
+      CURSOR_API_KEY: preserve(),
+      CURSOR_AGENT_MODEL: preserve(),
+      GITHUB_APP_ID: preserve(),
+      GITHUB_APP_PRIVATE_KEY: preserve(),
+      GITHUB_APP_INSTALLATION_ID: preserve(),
+      // The model that assesses, ranks and drafts. Unset: the rules rank the report.
+      ANTHROPIC_API_KEY: preserve(),
     },
   });
 

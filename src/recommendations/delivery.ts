@@ -7,13 +7,15 @@ import { detailsReply, recommendationMessage } from '../slack/messages.js';
 import type { WorkerDeps } from '../worker/deps.js';
 import { notifyOps } from '../worker/notify.js';
 import { getRecommendation } from './service.js';
-import type { RecommendationRow } from './types.js';
+import type { Recommendation, RecommendationRow } from './types.js';
 import { recommendationFromRow } from './types.js';
 
 export type PostOutcome =
   | 'posted'
   /** Not in `drafted` any more; nothing to do. */
   | 'skipped'
+  /** Shown on a shared message; its carrier was asked to post it. */
+  | 'carried'
   /** Waiting on a person: pause, a missing route, or Slack refusing the post. */
   | 'held'
   /** The channel is at its hourly limit; the job was put back for later. */
@@ -33,6 +35,19 @@ const HOLD_HINT: Record<string, string> = {
 export async function postRecommendation(deps: WorkerDeps, id: string): Promise<PostOutcome> {
   let blockedNotice: { text: string; channel: string } | undefined;
 
+  const carried = await deps.pool.query<{ carrier_type: string | null; carrier_id: string | null; status: string }>(
+    'SELECT carrier_type, carrier_id, status FROM recommendations WHERE id = $1',
+    [id],
+  );
+  const carrierRow = carried.rows[0];
+  if (carrierRow?.carrier_type && carrierRow.carrier_id) {
+    if (carrierRow.status !== 'drafted') return 'skipped';
+    const carrier = deps.carriers.get(carrierRow.carrier_type);
+    if (!carrier) throw new Error(`No carrier is registered for ${carrierRow.carrier_type}`);
+    await carrier.requestPost(deps, carrierRow.carrier_id);
+    return 'carried';
+  }
+
   const outcome = await withTx(deps.pool, async (tx): Promise<PostOutcome> => {
     const { rows } = await tx.query<RecommendationRow>('SELECT * FROM recommendations WHERE id = $1 FOR UPDATE', [id]);
     if (!rows[0] || rows[0].status !== 'drafted') return 'skipped';
@@ -50,7 +65,7 @@ export async function postRecommendation(deps: WorkerDeps, id: string): Promise<
 
     const cap = await getSetting(tx, 'slack.max_posts_per_hour');
     const recent = await tx.query<{ n: string; oldest: Date | null }>(
-      `SELECT count(*) AS n, min(posted_at) AS oldest
+      `SELECT count(DISTINCT slack_ts) AS n, min(posted_at) AS oldest
          FROM recommendations
         WHERE slack_channel = $1 AND posted_at > now() - interval '1 hour'`,
       [route.channelId],
@@ -105,16 +120,31 @@ export async function postRecommendation(deps: WorkerDeps, id: string): Promise<
   return outcome;
 }
 
+/**
+ * Edits whichever Slack message shows this recommendation: its own, or the shared message
+ * of its carrier. Slack errors are thrown for the caller to sort into retry or give up.
+ */
+export async function renderRecommendation(deps: WorkerDeps, rec: Recommendation): Promise<void> {
+  if (rec.carrierType && rec.carrierId) {
+    const carrier = deps.carriers.get(rec.carrierType);
+    if (!carrier) throw new Error(`No carrier is registered for ${rec.carrierType}`);
+    await carrier.render(deps, rec.carrierId);
+    return;
+  }
+  if (!rec.slackChannel || !rec.slackTs) return;
+  await deps.slack.updateMessage({
+    channel: rec.slackChannel,
+    ts: rec.slackTs,
+    ...recommendationMessage(rec, deps.catalog.label(rec.kind)),
+  });
+}
+
 /** Edits the Slack message in place to match the recommendation's current state. */
 export async function syncMessage(deps: WorkerDeps, id: string): Promise<void> {
   const rec = await getRecommendation(deps.pool, id);
-  if (!rec?.slackChannel || !rec.slackTs) return;
+  if (!rec) return;
   try {
-    await deps.slack.updateMessage({
-      channel: rec.slackChannel,
-      ts: rec.slackTs,
-      ...recommendationMessage(rec, deps.catalog.label(rec.kind)),
-    });
+    await renderRecommendation(deps, rec);
   } catch (err) {
     // The message was deleted, or the bot lost the channel. The record in Patcher stands.
     if (err instanceof SlackApiError && !err.retryable) {

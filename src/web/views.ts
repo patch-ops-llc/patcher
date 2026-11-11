@@ -1,3 +1,5 @@
+import type { PromptTask } from '../ai/prompts.js';
+import type { CallTotals } from '../ai/run.js';
 import type { AuditRow } from '../audit/auditLog.js';
 import type { QueueStats } from '../queue/queue.js';
 import type { ActionRecord, ApprovalRecord, Recommendation, RecommendationStatus } from '../recommendations/types.js';
@@ -8,6 +10,7 @@ import type { AllSettings } from '../settings/settings.js';
 import { settingDefs } from '../settings/settings.js';
 import type { Role, User } from '../settings/users.js';
 import { ROLES, hasRole } from '../settings/users.js';
+import { callsTable, usd } from './aiViews.js';
 import type { SafeHtml } from './html.js';
 import { html } from './html.js';
 import type { Flash, Session } from './session.js';
@@ -23,11 +26,13 @@ export interface PageContext {
 const NAV = [
   { href: '/', label: 'Home' },
   { href: '/approvals', label: 'Approvals' },
+  { href: '/audits', label: 'Audits' },
+  { href: '/projects', label: 'Projects' },
   { href: '/settings', label: 'Settings' },
   { href: '/activity', label: 'Activity' },
 ];
 
-const when = (date: Date | null | undefined): SafeHtml =>
+export const when = (date: Date | null | undefined): SafeHtml =>
   date
     ? html`<time datetime="${date.toISOString()}" title="${date.toISOString()}">${date
         .toISOString()
@@ -35,7 +40,7 @@ const when = (date: Date | null | undefined): SafeHtml =>
         .replace('T', ' ')} UTC</time>`
     : html`<span class="muted">never</span>`;
 
-const csrf = (ctx: PageContext) => html`<input type="hidden" name="_csrf" value="${ctx.session.csrfToken}" />`;
+export const csrf = (ctx: PageContext) => html`<input type="hidden" name="_csrf" value="${ctx.session.csrfToken}" />`;
 
 const personName = (users: Map<string, User>, id: string | null): string =>
   id === null ? '' : id === 'system' ? 'Patcher' : (users.get(id)?.displayName ?? id);
@@ -398,6 +403,14 @@ export function settingsPage(
     kinds: string[];
     dryRunEnv: boolean;
     slackReady: boolean;
+    ai: {
+      /** Null until the worker has reported. */
+      configured: boolean | null;
+      prompts: Record<PromptTask, string>;
+      spentDay: number;
+      spentMonth: number;
+      calls: CallTotals[];
+    },
   },
 ): string {
   const owner = hasRole(ctx.session.user, 'owner');
@@ -477,9 +490,56 @@ export function settingsPage(
             <input type="number" name="approvals.reminder_hours" min="1" max="720" value="${data.settings['approvals.reminder_hours']}" ${disabled} /></label>
           <label>${settingDefs['slack.max_posts_per_hour'].label}
             <input type="number" name="slack.max_posts_per_hour" min="1" max="60" value="${data.settings['slack.max_posts_per_hour']}" ${disabled} /></label>
+          <label>${settingDefs['audit.agent_timeout_minutes'].label}
+            <input type="number" name="audit.agent_timeout_minutes" min="10" max="1440" value="${data.settings['audit.agent_timeout_minutes']}" ${disabled} /></label>
           <div><button type="submit" ${disabled}>Save</button></div>
         </form>
         <p class="muted small">The global pause is on the Home screen and in <code>/ops pause</code>.</p>
+      </section>
+
+      <section class="card" id="ai">
+        <h2>AI</h2>
+        <p class="muted">
+          The weekly audit's checks collect the evidence. A model then says what each finding most likely means,
+          ranks the report, words its Slack lines and drafts the brief for a fix. It is given redacted text and
+          returns data; it holds no credentials and cannot start anything.
+        </p>
+        ${data.ai.configured === false
+          ? html`<div class="flash flash-error">
+              No model is configured, so the rules rank and word the report, and the report says so. Set
+              <code>ANTHROPIC_API_KEY</code> on the worker.
+            </div>`
+          : ''}
+        <form method="post" action="/settings/ai" class="stack">
+          ${csrf(ctx)}
+          <label class="check">
+            <input type="checkbox" name="ai.audit.enabled" value="1" ${data.settings['ai.audit.enabled'] ? 'checked' : ''} ${disabled} />
+            ${settingDefs['ai.audit.enabled'].label}
+          </label>
+          ${(['ai.audit.model_service', 'ai.audit.model_rollup', 'ai.audit.model_brief'] as const).map(
+            (key) =>
+              html`<label>${settingDefs[key].label}
+                <input name="${key}" value="${data.settings[key]}" required class="mono" ${disabled} /></label>`,
+          )}
+          <label>${settingDefs['ai.audit.daily_budget_usd'].label}
+            <input type="number" name="ai.audit.daily_budget_usd" min="0" max="10000" step="0.01" value="${data.settings['ai.audit.daily_budget_usd']}" ${disabled} /></label>
+          <label>${settingDefs['ai.audit.monthly_budget_usd'].label}
+            <input type="number" name="ai.audit.monthly_budget_usd" min="0" max="100000" step="0.01" value="${data.settings['ai.audit.monthly_budget_usd']}" ${disabled} /></label>
+          <label>${settingDefs['ai.audit.log_token_cap'].label}
+            <input type="number" name="ai.audit.log_token_cap" min="200" max="50000" value="${data.settings['ai.audit.log_token_cap']}" ${disabled} /></label>
+          <label>${settingDefs['ai.audit.wait_minutes'].label}
+            <input type="number" name="ai.audit.wait_minutes" min="5" max="1440" value="${data.settings['ai.audit.wait_minutes']}" ${disabled} /></label>
+          <div><button type="submit" ${disabled}>Save</button></div>
+        </form>
+        <p class="muted small">
+          Spent on audit model calls: ${usd(data.ai.spentDay)} in the last 24 hours, ${usd(data.ai.spentMonth)} in the last 30 days,
+          at list prices. Prompt versions in use:
+          ${Object.entries(data.ai.prompts)
+            .map(([task, version]) => `${task}/${version}`)
+            .join(', ')}.
+          A prompt changes with a release, not here.
+        </p>
+        ${data.ai.calls.length ? html`<h3>Model calls, last 30 days</h3>${callsTable(data.ai.calls)}` : ''}
       </section>
 
       <section class="card" id="schedules">
@@ -555,6 +615,14 @@ function roleSelect(current: Role, disabled: string): SafeHtml {
 
 // Activity ------------------------------------------------------------------------------------
 
+/** Where an audit-log target lives, from the action that wrote it. */
+function targetPath(action: string): string {
+  if (action.startsWith('finding.')) return '/audits/findings';
+  if (action.startsWith('audit.')) return '/audits';
+  if (action.startsWith('project.')) return '/projects';
+  return '/approvals';
+}
+
 export function activityPage(
   ctx: PageContext,
   data: { audit: AuditRow[]; runs: RunRow[]; users: Map<string, User>; nextBefore: string | null },
@@ -573,7 +641,7 @@ export function activityPage(
             ${data.audit.map(
               (a) => html`<tr>
                 <td>${when(a.at)}</td><td>${personName(data.users, a.actor)}</td><td><code>${a.action}</code></td>
-                <td>${a.target && /^[0-9a-f-]{36}$/.test(a.target) ? html`<a href="/approvals/${a.target}"><code>${a.target.slice(0, 8)}</code></a>` : html`<code>${a.target ?? ''}</code>`}</td>
+                <td>${a.target && /^[0-9a-f-]{36}$/.test(a.target) ? html`<a href="${targetPath(a.action)}/${a.target}"><code>${a.target.slice(0, 8)}</code></a>` : html`<code>${a.target ?? ''}</code>`}</td>
                 <td class="json">${compact(a.before)}</td><td class="json">${compact(a.after)}</td>
               </tr>`,
             )}

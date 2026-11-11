@@ -1,9 +1,11 @@
 import type { Pool } from '../src/db/pool.js';
 import { createPool } from '../src/db/pool.js';
+import { registerFixCatalog } from '../src/fix/agentFix.js';
 import { silentLogger } from '../src/log.js';
 import type { JobData, JobName } from '../src/queue/jobs.js';
 import { jobSchemas } from '../src/queue/jobs.js';
 import type { EnqueueOptions, Enqueuer } from '../src/queue/queue.js';
+import { Carriers } from '../src/recommendations/carriers.js';
 import { createCatalog } from '../src/recommendations/catalog.js';
 import type { Catalog } from '../src/recommendations/catalog.js';
 import type { NewRecommendation } from '../src/recommendations/service.js';
@@ -14,7 +16,8 @@ import type { SlackClient, SlackMessage, SlackView } from '../src/slack/client.j
 import type { SlackIdentity, SlackOidc } from '../src/slack/oidc.js';
 import { OidcError } from '../src/slack/oidc.js';
 import type { WebDeps } from '../src/web/deps.js';
-import type { WorkerDeps } from '../src/worker/deps.js';
+import { auditCarrier } from '../src/weekly/delivery.js';
+import type { Integrations, WorkerDeps } from '../src/worker/deps.js';
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? 'postgres://patcher:patcher@localhost:5432/patcher_test';
@@ -35,8 +38,14 @@ export function testPool(): Pool {
 export async function resetDb(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE settings, channel_routes, slack_channels, schedules, users, sessions, recommendations,
-             approvals, actions, webhook_events, runs, audit_log RESTART IDENTITY CASCADE`);
-  await pool.query(`INSERT INTO schedules (key, cron_expr, tz) VALUES ('approvals.expire', '0 9 * * *', 'America/Chicago')`);
+             approvals, actions, webhook_events, runs, audit_log, projects, project_links, project_checks,
+             railway_inventory, probe_results, audit_runs, audit_findings, agent_runs, integrations, llm_calls
+             RESTART IDENTITY CASCADE`);
+  await pool.query(`
+    INSERT INTO schedules (key, cron_expr, tz) VALUES
+      ('approvals.expire', '0 9 * * *', 'America/Chicago'),
+      ('audit.weekly', '0 8 * * 1', 'America/Chicago'),
+      ('probe.health', '*/5 * * * *', 'America/Chicago')`);
   await pool.query('DELETE FROM pgboss.job');
 }
 
@@ -158,14 +167,40 @@ export interface Harness {
   worker: WorkerDeps;
 }
 
+const CONFIGURED = { configured: true, missing: [] };
+
+/** Nothing outside is configured unless a test passes a stand-in. Probes fail loudly if used unplanned. */
+export function testIntegrations(overrides: Partial<Integrations> = {}): Integrations {
+  const railway = overrides.railway ?? null;
+  const github = overrides.github ?? null;
+  const cursor = overrides.cursor ?? null;
+  const model = overrides.model ?? null;
+  return {
+    railway,
+    github,
+    cursor,
+    model,
+    probe: overrides.probe ?? (() => Promise.reject(new Error('no prober in this test'))),
+    status: overrides.status ?? {
+      railway: railway ? CONFIGURED : { configured: false, missing: ['RAILWAY_API_TOKEN'] },
+      github: github ? CONFIGURED : { configured: false, missing: ['GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_INSTALLATION_ID'] },
+      cursor: cursor ? CONFIGURED : { configured: false, missing: ['CURSOR_API_KEY'] },
+      anthropic: model ? CONFIGURED : { configured: false, missing: ['ANTHROPIC_API_KEY'] },
+    },
+  };
+}
+
 export function harness(pool: Pool, overrides: Partial<WorkerDeps> = {}): Harness {
   const queue = new RecordingQueue();
   const slack = new FakeSlack();
-  const catalog = createCatalog();
+  const integrations = overrides.integrations ?? testIntegrations();
+  const catalog = registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor });
   const worker: WorkerDeps = {
     pool,
     queue,
     catalog,
+    carriers: new Carriers().register(auditCarrier),
+    integrations,
     slack,
     log: silentLogger,
     hubTeamId: HUB,

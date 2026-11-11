@@ -1,5 +1,6 @@
 import { ConfigError, loadWebConfig } from './config.js';
 import { createPool } from './db/pool.js';
+import { registerFixCatalog } from './fix/agentFix.js';
 import { createLogger } from './log.js';
 import { JobQueue } from './queue/queue.js';
 import { createCatalog } from './recommendations/catalog.js';
@@ -30,7 +31,8 @@ async function main(): Promise<void> {
   const app = createApp({
     pool,
     queue,
-    catalog: createCatalog(),
+    // Registered without a runtime: the public service validates and describes the action, never runs it.
+    catalog: registerFixCatalog(createCatalog(), null),
     log,
     appBaseUrl: config.appBaseUrl,
     cookies: { secret: config.sessionSecret, secure: config.appBaseUrl.startsWith('https://') },

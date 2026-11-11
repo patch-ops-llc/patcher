@@ -2,6 +2,7 @@ import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import { publicDir } from '../paths.js';
+import { listIntegrations } from '../integrations/status.js';
 import { queueStats } from '../queue/queue.js';
 import { getAllSettings } from '../settings/settings.js';
 import type { WebDeps } from './deps.js';
@@ -40,7 +41,11 @@ export function createApp(deps: WebDeps): express.Express {
   app.get('/health', async (_req, res) => {
     const features = Object.fromEntries(Object.entries(deps.features).map(([name, f]) => [name, f.configured]));
     try {
-      const [queue, settings] = await Promise.all([queueStats(deps.pool), getAllSettings(deps.pool)]);
+      const [queue, settings, integrations] = await Promise.all([
+        queueStats(deps.pool),
+        getAllSettings(deps.pool),
+        listIntegrations(deps.pool),
+      ]);
       res.json({
         ok: true,
         service: 'web',
@@ -50,8 +55,10 @@ export function createApp(deps: WebDeps): express.Express {
         dryRun: settings.dry_run || deps.dryRunEnv,
         // Which parts have the variables they need. Names of missing variables are in the logs.
         features,
-        // Last success of each integration; none exist until a later phase connects one.
-        integrations: {},
+        // What the worker reported at boot and the last success of each. No names of variables.
+        integrations: Object.fromEntries(
+          integrations.map((i) => [i.name, { configured: i.configured, lastOkAt: i.lastOkAt?.toISOString() ?? null }]),
+        ),
       });
     } catch (err) {
       deps.log.error('health check failed', { err });

@@ -71,6 +71,29 @@ describe('configuration', () => {
     expect(loadWorkerConfig({ ...required, DRY_RUN: '0' }).dryRunEnv).toBe(false);
   });
 
+  it('treats the model key as optional on the worker, and keeps it out of an error', () => {
+    const worker = loadWorkerConfig({ ...required });
+    expect(worker.anthropicApiKey).toBeUndefined();
+    expect(worker.features.anthropic).toEqual({ configured: false, missing: ['ANTHROPIC_API_KEY'] });
+
+    const key = 'test-key-not-a-real-one-0000';
+    const withKey = loadWorkerConfig({ ...required, ANTHROPIC_API_KEY: key });
+    expect(withKey.anthropicApiKey).toBe(key);
+    expect(withKey.features.anthropic).toEqual({ configured: true, missing: [] });
+    // The public service is never given the key.
+    expect(loadWebConfig({ ...required, ANTHROPIC_API_KEY: key })).not.toHaveProperty('anthropicApiKey');
+
+    let message = '';
+    try {
+      loadWorkerConfig({ ...required, ANTHROPIC_API_KEY: 'too-short-KEYVALUE' });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('ANTHROPIC_API_KEY');
+    expect(message).not.toContain('KEYVALUE');
+    expect(() => loadWorkerConfig({ ...required, NODE_ENV: 'production', ANTHROPIC_API_URL: 'http://localhost:4020' })).toThrow(/ANTHROPIC_API_URL/);
+  });
+
   it('refuses the development-only Slack overrides in production', () => {
     const production = { ...required, NODE_ENV: 'production' };
     expect(() => loadWebConfig({ ...production, SLACK_API_URL: 'http://localhost:4010/api/' })).toThrow(/SLACK_API_URL/);

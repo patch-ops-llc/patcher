@@ -21,6 +21,8 @@ async function schedule(cron: string, tz: string, editedAt: string, lastRunAt: s
 
 beforeEach(async () => {
   await resetDb(pool);
+  // These tests drive one schedule; the audit's own schedules are covered in audit-run.test.ts.
+  await pool.query(`DELETE FROM schedules WHERE key <> 'approvals.expire'`);
   queue = new RecordingQueue();
 });
 afterAll(() => pool.end());

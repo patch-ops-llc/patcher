@@ -56,6 +56,9 @@ export interface Recommendation {
   decidedBy: string | null;
   detailsTs: string | null;
   lastError: string | null;
+  /** Set when a shared Slack message carries this recommendation instead of its own. */
+  carrierType: string | null;
+  carrierId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -108,6 +111,8 @@ export interface RecommendationRow {
   decided_by: string | null;
   details_ts: string | null;
   last_error: string | null;
+  carrier_type: string | null;
+  carrier_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -136,6 +141,8 @@ export const recommendationFromRow = (r: RecommendationRow): Recommendation => (
   decidedBy: r.decided_by,
   detailsTs: r.details_ts,
   lastError: r.last_error,
+  carrierType: r.carrier_type,
+  carrierId: r.carrier_id,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });

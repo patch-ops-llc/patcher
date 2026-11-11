@@ -1,3 +1,5 @@
+import { pollAgentRun } from '../fix/agentFix.js';
+import { runProbes } from '../probes/run.js';
 import type { JobQueue } from '../queue/queue.js';
 import { postDetails, postRecommendation, resumeHeld, syncMessage } from '../recommendations/delivery.js';
 import { executeAction } from '../recommendations/executor.js';
@@ -8,6 +10,9 @@ import { isPaused } from '../settings/settings.js';
 import { getUser } from '../settings/users.js';
 import { SlackApiError } from '../slack/client.js';
 import { clip, homeView } from '../slack/messages.js';
+import { pollAnalysis, proposeFixFor } from '../weekly/analyze.js';
+import { postAuditReport, resumeHeldReports } from '../weekly/delivery.js';
+import { runAudit } from '../weekly/run.js';
 import type { WorkerDeps } from './deps.js';
 import { notifyOps } from './notify.js';
 
@@ -20,6 +25,13 @@ export type ScheduleHandler = (deps: WorkerDeps) => Promise<string>;
  */
 export const scheduleHandlers: Record<string, ScheduleHandler> = {
   'approvals.expire': (deps) => runExpiry(deps),
+  // The audit runs for minutes, so the schedule only starts it; the run is recorded when it ends.
+  'audit.weekly': async (deps) => {
+    if (!deps.integrations.railway) return 'Skipped: Railway is not configured (RAILWAY_API_TOKEN).';
+    await deps.queue.enqueue('audit.run', { trigger: 'schedule', requestedBy: 'system' });
+    return 'Audit started.';
+  },
+  'probe.health': (deps) => runProbes(deps),
 };
 
 export async function runSchedule(
@@ -132,7 +144,40 @@ export async function registerHandlers(queue: JobQueue, deps: WorkerDeps): Promi
   await queue.work('system.resume', async () => {
     if (await isPaused(deps.pool)) return;
     const resumed = await resumeHeld(deps);
-    deps.log.info('resumed held work', resumed);
+    const reports = await resumeHeldReports(deps);
+    deps.log.info('resumed held work', { ...resumed, auditReports: reports });
+  });
+  await queue.work('audit.run', async (data) => {
+    const started = new Date();
+    const record = (ok: boolean, summary: string) =>
+      deps.pool.query(
+        `INSERT INTO runs (pipeline, trigger, started_at, finished_at, ok, summary) VALUES ('audit', $1, $2, now(), $3, $4)`,
+        [data.trigger, started, ok, clip(summary, 500)],
+      );
+    try {
+      const outcome = await runAudit(deps, data.trigger, data.requestedBy);
+      await record(true, outcome.summary);
+      deps.log.info('audit finished', { ...outcome });
+    } catch (err) {
+      await record(false, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  });
+  await queue.work('audit.analyze', async (data) => {
+    const outcome = await pollAnalysis(deps, data.runId);
+    deps.log[outcome === 'done' ? 'info' : 'debug']('audit analysis', { runId: data.runId, outcome });
+  });
+  await queue.work('audit.fix.propose', async (data) => {
+    const recommendation = await proposeFixFor(deps, data.findingId, data.requestedBy);
+    deps.log.info('fix proposal', { findingId: data.findingId, recommendationId: recommendation?.id ?? null });
+  });
+  await queue.work('audit.report.post', async (data) => {
+    const outcome = await postAuditReport(deps, data.runId);
+    deps.log.info('audit report post', { runId: data.runId, outcome });
+  });
+  await queue.work('agent.poll', async (data) => {
+    const outcome = await pollAgentRun(deps, data.agentRunId);
+    deps.log.debug('agent poll', { agentRunId: data.agentRunId, outcome });
   });
 
   await queue.onDeadLetter(async (dead) => {

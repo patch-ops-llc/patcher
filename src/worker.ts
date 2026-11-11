@@ -1,13 +1,23 @@
 import http from 'node:http';
+import { createAnthropicClient } from './ai/client.js';
+import { loadAllPrompts } from './ai/prompts.js';
 import { ConfigError, loadWorkerConfig } from './config.js';
+import { createCursorClient } from './cursor/client.js';
 import { createPool } from './db/pool.js';
+import { registerFixCatalog } from './fix/agentFix.js';
+import { createGitHubClient, parseGitHubPrivateKey } from './github/client.js';
+import { recordConfigured } from './integrations/status.js';
 import { createLogger } from './log.js';
+import { createProber } from './probes/probe.js';
 import { JobQueue } from './queue/queue.js';
+import { createRailwayClient } from './railway/client.js';
+import { Carriers } from './recommendations/carriers.js';
 import { createCatalog } from './recommendations/catalog.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { loadPrivateKey } from './security/sealed.js';
 import { createSlackClient, unconfiguredSlackClient } from './slack/client.js';
-import type { WorkerDeps } from './worker/deps.js';
+import { auditCarrier } from './weekly/delivery.js';
+import type { Integrations, WorkerDeps } from './worker/deps.js';
 import { registerHandlers } from './worker/handlers.js';
 
 /**
@@ -18,6 +28,16 @@ async function main(): Promise<void> {
   const config = loadWorkerConfig();
   const log = createLogger(config.logLevel, { service: 'worker' });
   if (config.tokenPrivateKey) loadPrivateKey(config.tokenPrivateKey);
+  if (config.github) {
+    try {
+      parseGitHubPrivateKey(config.github.privateKey);
+    } catch {
+      throw new ConfigError('Missing or invalid environment variables: GITHUB_APP_PRIVATE_KEY');
+    }
+  }
+
+  // A prompt file missing from the deploy stops the worker here, not at the next audit.
+  loadAllPrompts();
 
   for (const [name, status] of Object.entries(config.features)) {
     if (!status.configured) log.warn('feature not configured', { feature: name, missing: status.missing });
@@ -25,10 +45,41 @@ async function main(): Promise<void> {
 
   const pool = createPool(config.databaseUrl);
   const queue = await JobQueue.start(config.databaseUrl, 'worker', log);
+  // The clients for Railway, GitHub, Cursor and the model provider exist only here. The public
+  // service never holds their credentials; it reads what is configured from the `integrations` table.
+  const integrations: Integrations = {
+    railway: config.railwayApiToken
+      ? createRailwayClient({ token: config.railwayApiToken, log, ...(config.railwayApiUrl ? { endpoint: config.railwayApiUrl } : {}) })
+      : null,
+    github: config.github
+      ? createGitHubClient({ ...config.github, ...(config.githubApiUrl ? { baseUrl: config.githubApiUrl } : {}) })
+      : null,
+    cursor: config.cursorApiKey
+      ? createCursorClient({
+          apiKey: config.cursorApiKey,
+          model: config.cursorAgentModel,
+          ...(config.cursorApiUrl ? { baseUrl: config.cursorApiUrl } : {}),
+        })
+      : null,
+    model: config.anthropicApiKey
+      ? createAnthropicClient({ apiKey: config.anthropicApiKey, baseUrl: config.anthropicApiUrl })
+      : null,
+    probe: createProber(),
+    status: {
+      railway: config.features.railway,
+      github: config.features.github,
+      cursor: config.features.cursor,
+      anthropic: config.features.anthropic,
+    },
+  };
+  await recordConfigured(pool, integrations.status);
+
   const deps: WorkerDeps = {
     pool,
     queue,
-    catalog: createCatalog(),
+    catalog: registerFixCatalog(createCatalog(), { pool, queue, cursor: integrations.cursor }),
+    carriers: new Carriers().register(auditCarrier),
+    integrations,
     slack: config.slackBotToken
       ? createSlackClient({ token: config.slackBotToken, apiUrl: config.slackApiUrl })
       : unconfiguredSlackClient(),

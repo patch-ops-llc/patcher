@@ -10,6 +10,8 @@ import type { ReportType } from '../settings/routes.js';
 export interface ActionContext {
   /** Stable per approved recommendation version; pass it to third parties that accept one. */
   idempotencyKey: string;
+  /** The approved recommendation, for an action that reports back to its thread later. */
+  recommendationId: string;
   log: Logger;
 }
 

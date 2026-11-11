@@ -45,6 +45,18 @@ const RETRY_POLICY = {
   expireInSeconds: 300,
 } as const;
 
+/**
+ * Queues that differ from the default. The audit reads a whole workspace, which takes
+ * minutes, and a second attempt straight after a failure would spend the same Railway
+ * requests again: it runs once, and the next schedule or a person starts the next one.
+ */
+const QUEUE_OVERRIDES: Partial<Record<JobName, { retryLimit?: number; expireInSeconds?: number }>> = {
+  'audit.run': { retryLimit: 0, expireInSeconds: 3600 },
+  // One poll can end in the ranking call and up to three briefs, each of which may think for a while.
+  'audit.analyze': { expireInSeconds: 1800 },
+  'audit.fix.propose': { expireInSeconds: 900 },
+};
+
 function errorText(output: unknown): string {
   if (output && typeof output === 'object' && 'message' in output) {
     const message = (output).message;
@@ -80,7 +92,7 @@ export class JobQueue implements Enqueuer {
       await this.boss.createQueue(DEAD_LETTER_QUEUE, { retryLimit: 3, retryDelay: 30 });
     }
     for (const name of jobNames) {
-      const options = { ...RETRY_POLICY, deadLetter: DEAD_LETTER_QUEUE };
+      const options = { ...RETRY_POLICY, ...QUEUE_OVERRIDES[name], deadLetter: DEAD_LETTER_QUEUE };
       if (await this.boss.getQueue(name)) await this.boss.updateQueue(name, options);
       else await this.boss.createQueue(name, options);
     }

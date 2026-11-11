@@ -30,8 +30,9 @@ apply` and went through; later pushes to the branch wait in **web → Deployment
 deployment that is already running keeps serving in the meantime.
 
 What is left is for the owner: section 3 (the Slack app and its six variables), section 4
-(first run), and the last item of section 5 after the pull request is merged. Sections 1
-and 2 are kept as the record of how the project is built, should it ever be rebuilt.
+(first run), section 5 (the weekly audit and its variables), and the last item of section 6
+after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
+is built, should it ever be rebuilt.
 
 ## 1. Railway project
 
@@ -120,6 +121,25 @@ node -e "import('./dist/security/sealed.js').then(m => { const k = m.generateTok
 any other workspace are refused. `BOOTSTRAP_OWNER_SLACK_USER_ID` makes that one person an
 owner the first time they sign in; every other person is added in **Settings → People**.
 
+### Owner: for the weekly audit (step 5)
+
+All on **worker only**. `web` must never hold any of them.
+
+| Variable | Needed for | Where the value comes from |
+| --- | --- | --- |
+| `RAILWAY_API_TOKEN` | The audit itself, the inventory and the probes | Railway → **Account Settings → Tokens** (<https://railway.com/account/tokens>) → choose the PatchOps workspace in the dropdown → **Create** |
+| `CURSOR_API_KEY` | "Fix via agent" | Cursor Dashboard → **API Keys**, or a service account API key |
+| `CURSOR_AGENT_MODEL` | Optional: the model the agent uses | A model ID from Cursor's `GET /v1/models`. Unset: the account's default |
+| `GITHUB_APP_ID` | "Production behind the default branch" and "critical dependency alerts" | The GitHub App's settings page → **About** → App ID |
+| `GITHUB_APP_PRIVATE_KEY` | Same | The GitHub App's settings page → **Private keys** → **Generate a private key**; paste the whole `.pem` file's contents |
+| `GITHUB_APP_INSTALLATION_ID` | Same | After installing the app: the number at the end of the installation's address, `https://github.com/organizations/<org>/settings/installations/<number>` |
+| `ANTHROPIC_API_KEY` | The model that assesses findings, ranks the report and drafts fix briefs | Claude Console (<https://platform.claude.com>) → **API keys** → **Create key** |
+
+Each of the four is independent. Without Railway nothing is audited; without Cursor the
+report has no "Fix via agent" buttons; without GitHub two checks are listed as not run;
+without Anthropic the rules rank and word the report, and its second line says
+"ranked by rules (AI not configured)".
+
 ### Optional
 
 | Variable | Service | Purpose |
@@ -127,7 +147,8 @@ owner the first time they sign in; every other person is added in **Settings →
 | `DRY_RUN` | worker | `1` logs approved actions instead of executing them, whatever the UI switch says |
 | `LOG_LEVEL` | web, worker | `debug`, `info` (default), `warn`, `error` |
 
-`SLACK_API_URL` and `SLACK_OIDC_URL` are for local development only and are refused when
+`SLACK_API_URL`, `SLACK_OIDC_URL`, `RAILWAY_API_URL`, `CURSOR_API_URL`, `GITHUB_API_URL` and
+`ANTHROPIC_API_URL` are for local development only and are refused when
 `NODE_ENV=production`.
 
 ## 3. Owner: the Slack app
@@ -174,7 +195,69 @@ If the web address changes later (a custom domain, for example), change all four
    Approve it in Slack, or on the **Approvals** page. The message becomes one line and the
    decision appears under **Activity**.
 
-## 5. Later, not needed for the foundation
+## 5. Owner: the weekly audit
+
+The audit is built to read Railway and nothing else: every request it can send is one of the
+fixed queries in [`src/railway/queries.ts`](../src/railway/queries.ts), none of which changes
+anything or returns a variable's value. Railway's own tokens have no read-only kind, though:
+a workspace token can do anything in the workspace. So the token goes only into the worker's
+`RAILWAY_API_TOKEN` variable, and nowhere else.
+
+1. **Railway token.** Create a workspace token for the PatchOps workspace and set it as
+   `RAILWAY_API_TOKEN` on `worker`. Use a token made for Patcher alone, so it can be revoked
+   without affecting anything else.
+2. **Channel.** In **Settings → Slack routing**, choose the channel for **Audit** and invite
+   the bot to it. Without a channel the report waits and the **Audits** screen says so.
+3. **First audit.** Open **Audits → Run audit now**, or type `/ops audit now` in Slack. It
+   takes a minute or two. The first run also fills the Railway inventory, which the probes
+   and the registry import need. After that it runs every Monday at 08:00 Central
+   (**Settings → Schedules** changes or disables it), and services are probed every five
+   minutes.
+4. **Registry.** Open **Projects**. Under "Railway projects not in the registry", import the
+   projects Patcher should be allowed to propose fixes for. Importing links each project to
+   the repositories its services deploy from. This list is the permission: an agent is never
+   started on a repository that is not linked to an active project here.
+5. **Cursor key** (for "Fix via agent"). Create the key and set `CURSOR_API_KEY` on `worker`.
+   A service account key limited to the repositories in the registry is the narrowest
+   choice. Cursor's GitHub integration must have access to those repositories, or the agent
+   cannot open a pull request. Agents work on their own branch and open a pull request;
+   Patcher never merges one.
+6. **GitHub App** (for the two GitHub checks). In the GitHub organisation: **Settings →
+   Developer settings → GitHub Apps → New GitHub App**. No webhook, no user authorisation.
+   Repository permissions, all **Read-only**: **Metadata**, **Contents**, **Dependabot
+   alerts**. No other permission. Create it, generate a private key, install it on the
+   repositories in the registry, and set the three `GITHUB_APP_*` variables on `worker`.
+   Repositories outside that organisation need the app installed there too, or their two
+   checks stay "not run".
+7. **Anthropic key** (for the model steps). Create an API key and set `ANTHROPIC_API_KEY` on
+   `worker`. A key in a Console workspace made for Patcher, with a spend limit, is the
+   narrowest choice. With the key set, each audit sends Anthropic, per service that has a
+   finding above informational: the service's facts as the collectors read them (names,
+   deployment states, counts), its findings, and its error-log patterns after redaction and
+   up to a token cap. Variable names and values are never sent. Without the key nothing is
+   sent and the rules rank the report.
+   **Settings → AI** has the switch, the model per step, the daily and monthly budget (both
+   start unset), the log cap and how long to wait for the model. It also shows what has
+   been spent and every call by task, model and prompt version.
+8. Check `https://<web address>/health`: `integrations.railway`, `cursor`, `github` and
+   `anthropic` show `configured: true` once the worker has restarted with the variables. The
+   **Audits** screen shows the same, with the time each one last answered.
+
+Things to know:
+
+- With a model, an audit has two stages. The checks run and their findings appear under
+  **Audits** within a minute or two. The per-service requests go to Anthropic as one batch
+  (half price), which usually comes back within the hour; the report is posted to Slack
+  when it does. If it has not come back after the time set in **Settings → AI** (two hours
+  to start with), the report goes out with the rules' wording.
+- Muting or accepting a finding (on its page) keeps it out of the report until it is
+  reopened. Both record who and why.
+- **Settings → Switches → Dry run** applies here too: an approved fix is logged and no agent
+  is started.
+- Project-specific checks (a URL, an expected status and optionally expected JSON) are added
+  on a project's page and probed with the rest.
+
+## 6. Later, not needed for the foundation
 
 - An external uptime monitor on `https://<web address>/health` (design section 13.1).
 - Railway: restrict who can view the project's variables; turn on two-factor

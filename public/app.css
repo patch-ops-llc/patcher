@@ -267,6 +267,14 @@ td.json {
   border-bottom: 0;
 }
 
+.list li.finding {
+  justify-content: flex-start;
+}
+
+.list li.finding > div:first-child {
+  flex: 0 0 5rem;
+}
+
 blockquote {
   margin: 0;
   padding-left: 0.75rem;
@@ -444,6 +452,16 @@ button.link {
 .flash-error {
   background: var(--err-bg);
   color: var(--err-ink);
+}
+
+.flash-info {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+details > summary {
+  cursor: pointer;
+  color: var(--muted);
 }
 
 .banner {
