@@ -191,7 +191,11 @@ function updatesTable(updates: DealRoomUpdate[]): SafeHtml {
           <td>${when(u.createdAt)}</td>
           <td>
             ${u.route === 'api'
-              ? html`${safeUrl(u.roomUrl) ? html`<a href="${u.roomUrl}" rel="noreferrer">Room${u.slug ? ` ${u.slug}` : ''}</a>` : html`<span class="muted">no room yet</span>`}
+              ? html`${safeUrl(u.roomUrl)
+                    ? html`<a href="${u.roomUrl}" rel="noreferrer">Room${u.slug ? ` ${u.slug}` : ''}</a>`
+                    : u.roomId
+                      ? html`Room${u.slug ? html` <code>${u.slug}</code>` : ''}`
+                      : html`<span class="muted">no room yet</span>`}
                   <div class="muted small">
                     Service API · <code>${u.origin ?? ''}</code>${u.room ? html` · the room was ${u.room.status} when last read, open to ${audienceText(u.room)}` : ''}
                   </div>`
@@ -403,7 +407,8 @@ function roomCard(ctx: PageContext, data: ProposalPageData): SafeHtml {
   const live = update.room ? update.room.status !== 'DRAFT' : false;
   const approver = mayPublish(ctx);
   const again = proposal.callId && maySell(ctx) ? html`<form method="post" action="/sales/calls/${proposal.callId}/reoffer">${csrf(ctx)}<button type="submit">Offer again</button></form>` : '';
-  const what = held ? (live ? 'Write to the live room' : 'Replace the edits in the draft room') : 'Publish';
+  const edited = Boolean(update.hold && update.hold.replaces.length + update.hold.removes.length);
+  const what = !held ? 'Publish' : update.room?.status === 'ACTIVE' ? 'Write to the live room' : live ? 'Write to the room' : edited ? 'Replace the edits in the draft room' : 'Write to the draft room';
   let next: SafeHtml;
   if (!followUp) {
     next =
@@ -442,7 +447,7 @@ function roomCard(ctx: PageContext, data: ProposalPageData): SafeHtml {
       ? html`<p>
           The proposal is final and its files are held in Patcher.
           ${live && update.room ? html`The room is <strong>${update.room.status}</strong>, open to ${audienceText(update.room)}: anything written shows to them at once.` : ''}
-          ${update.hold && update.hold.replaces.length + update.hold.removes.length
+          ${edited && update.hold
             ? html`A person edited these files in the room, and writing would replace or remove them:
                 ${[...update.hold.replaces, ...update.hold.removes].map((path) => html`<code>${path}</code> `)}`
             : ''}
@@ -769,7 +774,7 @@ export function salesSettingsCard(
             ? html`<span class="badge badge-done">Bot token set on the worker</span>
                 <span class="muted small">Last answer from the deal room ${data.dealRoomApi.lastOkAt ? when(data.dealRoomApi.lastOkAt) : 'never'}${
                   data.dealRoomApi.lastError && data.dealRoomApi.lastErrorAt && (!data.dealRoomApi.lastOkAt || data.dealRoomApi.lastErrorAt > data.dealRoomApi.lastOkAt)
-                    ? ` · last error ${when(data.dealRoomApi.lastErrorAt)}: ${data.dealRoomApi.lastError}`
+                    ? html` · last error ${when(data.dealRoomApi.lastErrorAt)}: ${data.dealRoomApi.lastError}`
                     : ''
                 }</span>`
             : html`<span class="badge badge-failed">No bot token</span> <span class="muted small">Missing on the worker: ${data.dealRoomApi.missing.join(', ')}</span>`}

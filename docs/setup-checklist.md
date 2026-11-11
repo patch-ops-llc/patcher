@@ -31,7 +31,8 @@ deployment that is already running keeps serving in the meantime.
 
 What is left is for the owner: section 3 (the Slack app and its six variables), section 4
 (first run), section 5 (the weekly audit and its variables), section 6 (call transcripts),
-section 7 (sales calls, proposals and the deal room, with three more variables), section 8
+section 7 (sales calls, proposals and the deal room, with three more variables, and one
+more if the deal room's service API is used), section 8
 (the Slack reader: an update to the Slack app, one authorisation, and one more variable if
 forwarded email is wanted), and the last item of section 9 after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
 is built, should it ever be rebuilt.
@@ -158,6 +159,19 @@ App, made for the deal room alone; do not reuse the read-only app's values.
 Without them sales calls are still found and proposals drafted, approved and rendered as
 PDF. Approving a Penguin deal's proposal then fails with "the deal room GitHub App is not
 configured" and a Retry button; nothing is lost.
+
+For the deal room's service API (section 7, "The service API route"), one more, also on
+**worker only**:
+
+| Variable | Where the value comes from |
+| --- | --- |
+| `DEALROOM_API_TOKEN` | The same value as `OPS_BOT_TOKEN` on the deal room service. If the deal room has none yet, make one (`openssl rand -hex 32`) and set it in both places. 32 characters or more, no spaces |
+
+Do not set it on `web`, and do not make it a shared variable: in production `web` refuses
+to start while it has this variable, and says so in its deploy log. Railway keeps the
+previous deployment serving when a new one fails to start. The value is never stored in
+Patcher's database, shown in the UI or written to a log; **Settings → Sales** shows only
+whether the worker has it.
 
 ### Owner: for the Slack reader (step 8)
 
@@ -433,6 +447,67 @@ Steps 1 to 4 need no new variable. Steps 5 to 7 are for the deal room only.
    the repository name ("Repository of the Penguin deal room"; change it only if the
    repository is renamed).
 
+### The service API route
+
+The deal room can also be written through its own service API, which needs no pull request
+and no redeploy. It is off until it is chosen in Settings, and the pull request route above
+stays available.
+
+Before it can be used:
+
+1. **The deal room side is deployed.** Its pull requests
+   [#2](https://github.com/patch-ops-llc/penguin-dealroom/pull/2) and then
+   [#3](https://github.com/patch-ops-llc/penguin-dealroom/pull/3) are merged, and the deal
+   room has redeployed. Merging runs one database migration there (a new `externalRef`
+   column). Until then every call answers 404 and Patcher says "Is the service API
+   deployed at the address in Settings?".
+2. **The token.** `OPS_BOT_TOKEN` is set on the deal room service, and the same value is
+   set as `DEALROOM_API_TOKEN` on Patcher's `worker` (see section 2). Restart the worker.
+3. **Settings → Sales → Penguin deal room.** Choose **Service API**, and enter the deal
+   room's address: `https://` and the host, nothing after it. Save. The card shows "Bot
+   token set on the worker" once the worker has restarted with the variable, and when the
+   deal room last answered.
+4. **Publishing.** Leave "Offer Publish…" off to start. Read "What Patcher may do" below
+   before switching it on.
+5. **Who may publish (optional).** **Settings → People**: an approver whose kinds are left
+   empty may approve everything. To keep publishing to named people, give the others the
+   kinds they should have (for example `proposal`) and leave `dealroom_publish` out.
+
+What Patcher may do on this route:
+
+- **Before a proposal is approved: nothing.** No request goes to the deal room.
+- **On approval of a Penguin proposal:** it finds the deal's room by its own reference
+  (`patcher:deal:<id>`), or creates one as a draft with no members, invites or client
+  domains. If the room is a draft and holds no file a person edited, it writes the
+  proposal's files and sets the proposal version and date. A draft room cannot be opened
+  by clients. The Slack message becomes "draft room ready" with **Preview**.
+- **If the room is already live, closed or archived, or a person edited its files:**
+  nothing is written. The proposal is final, its files wait in Patcher, and the proposal's
+  page lists what writing would add, replace or remove.
+- **With publishing off:** that is all. Patcher never changes a room's status and never
+  writes to a room that is not a draft. A person publishes in the deal room's `/admin`;
+  within 30 minutes the message says "published in the deal room admin".
+- **With publishing on:** two more buttons can appear, each a separate approval for that
+  one deal, each naming how many members, pending invites and allowed email domains the
+  room has. **Publish** sets a draft room to active. **Write to live room** writes the
+  waiting files to a room that is not a draft, and shows at once to everyone who can open
+  it. If the room changed after the question was put, nothing is done and Patcher asks
+  again with the new numbers.
+- **Replace edits** (shown whether publishing is on or off) writes over files a person
+  edited in a draft room. It is its own approval too.
+- **A room you made by hand.** Open the deal in Patcher (**Sales** → the deal) and save the
+  room's slug under **Deal room**. On approval Patcher links that room to the deal, only if
+  no other deal is linked to it. Without a saved slug Patcher never takes over an existing
+  room: if the slug it would use is taken, the approval fails and says which slug to save.
+- The API cannot add members, invites or allowed domains, hide pages, close or archive a
+  room, or delete a content file that lives in the deal room's repository. Those stay with
+  people in `/admin` and in GitHub.
+
+Check: `https://<web address>/health` shows `integrations.dealroom_api` with
+`configured: true`. Then approve one Penguin proposal for a made-up deal and look at the
+draft room in the deal room before using it for a real one. This route has been tested
+only against a stand-in built from the API's written contract.
+
 What happens then:
 
 - A call the model is sure was a sales call (0.80 and above) gets a proposal draft by
@@ -463,6 +538,10 @@ What is sent where, once this is on:
   a key.
 - **To GitHub**, only after an approval of a Penguin deal with a slug: the approved
   proposal's text, as files in a pull request on the deal room repository.
+- **To the deal room's service API**, when that route is chosen and only after an approval:
+  the prospect's company name, Patcher's own id for the deal, the approved proposal's text
+  as files, and its version and date. Patcher reads back the room's status, its files and
+  how many people can open it; it does not keep member addresses or domain names.
 - **To Slack**: the prospect's company, the first contact's first name, the proposal's
   one-line summary and its gaps. Never the transcript, the proposal's text or a price.
 
@@ -472,7 +551,9 @@ Things to know:
   confidence thresholds, the model per step, the title words that hint at a sales call, and
   a daily and monthly budget (both start unset).
 - Pause and **Dry run** apply here too. In a dry run an approved proposal is logged and
-  neither made final nor sent to the deal room.
+  neither made final nor sent to the deal room, and an approved Publish changes nothing.
+- Changing the deal room route, its address or the publish switch closes what was waiting
+  for approval and offers it again under the new setting.
 - A second call with the same prospect joins the same deal and its draft is the next
   version of the proposal. The versions are on the deal's page.
 - A proposal that expires without a decision is not lost: **Regenerate** or **Review**

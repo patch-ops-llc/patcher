@@ -84,6 +84,8 @@ export default defineRailway(() => {
       DEALROOM_GITHUB_APP_ID: preserve(),
       DEALROOM_GITHUB_APP_PRIVATE_KEY: preserve(),
       DEALROOM_GITHUB_APP_INSTALLATION_ID: preserve(),
+      // The deal room's service API token. On the worker only: web refuses to start with it.
+      DEALROOM_API_TOKEN: preserve(),
     },
   });
 

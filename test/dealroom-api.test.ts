@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { createServiceAdapter, externalRefFor } from '../src/dealroom/adapter.js';
 import { prepareFiles } from '../src/dealroom/files.js';
@@ -165,6 +167,80 @@ describe('the service API client', () => {
     const unreachable = createDealRoomService({ token: ROOM_TOKEN, fetch: () => Promise.reject(new Error(`connect failed with ${ROOM_TOKEN}`)) });
     const err = await refusal(() => unreachable.list(ROOM_ORIGIN, {}));
     expect(err).toMatchObject({ code: 'unreachable', message: 'The deal room could not be reached.' });
+  });
+});
+
+describe('the service API client over a real connection', () => {
+  /** The stand-in behind a local HTTP server, so the client's own `fetch` is the one that runs. */
+  async function served() {
+    const seen: { where: string; authorization: string | undefined }[] = [];
+    const elsewhere = createServer((req, res) => {
+      seen.push({ where: 'elsewhere', authorization: req.headers.authorization });
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{"deals":[]}');
+    });
+    await new Promise<void>((resolve) => elsewhere.listen(0, '127.0.0.1', resolve));
+    const away = `http://127.0.0.1:${(elsewhere.address() as AddressInfo).port}`;
+
+    const state: { room?: FakeDealRoom; redirect: boolean } = { redirect: false };
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        if (state.redirect) {
+          res.writeHead(307, { location: `${away}${req.url ?? ''}` }).end();
+          return;
+        }
+        const body = Buffer.concat(chunks).toString('utf8');
+        const headers = new Headers();
+        for (const [name, value] of Object.entries(req.headers)) if (typeof value === 'string') headers.set(name, value);
+        const room = state.room!;
+        void room.fetch(`${room.origin}${req.url ?? ''}`, { method: req.method, headers, ...(body ? { body } : {}) }).then(async (answer) => {
+          res.writeHead(answer.status, { 'content-type': 'application/json' }).end(await answer.text());
+        });
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const room = (state.room = new FakeDealRoom(origin));
+    const close = () => Promise.all([server, elsewhere].map((s) => new Promise((resolve) => s.close(resolve))));
+    return { room, origin, seen, close, redirectNow: () => (state.redirect = true) };
+  }
+
+  it('creates, writes and publishes over HTTP, and does not carry the token along a redirect', async () => {
+    const { room, origin, seen, close, redirectNow } = await served();
+    try {
+      // Plain http is for this machine only, and only outside production.
+      expect((await refusal(() => createDealRoomService({ token: ROOM_TOKEN }).list(origin, {}))).code).toBe('bad_request_local');
+
+      const service = createDealRoomService({ token: ROOM_TOKEN, allowLocalHttp: true });
+      const adapter = createServiceAdapter(service);
+      const found = await adapter.findDeal(origin, DEAL, FACTS);
+      const written = await adapter.publish(origin, found, prepared(), { version: 1, facts: FACTS, confirm: null });
+      expect(written).toMatchObject({ outcome: 'written', live: false });
+      expect(room.only()).toMatchObject({ status: 'DRAFT', proposalVersion: 'v1' });
+      expect(room.paths(found.room.id)).toEqual(['overview.md', 'proposal/01-summary.md', 'proposal/02-scope.md']);
+      expect(room.calls.every((c) => c.authorized)).toBe(true);
+      expect(await adapter.activate(origin, found.room.id)).toMatchObject({ changed: true, room: { status: 'ACTIVE' } });
+
+      const wrong = createDealRoomService({ token: `wrong-${ROOM_TOKEN}`, allowLocalHttp: true });
+      expect((await refusal(() => wrong.list(origin, {}))).code).toBe('unauthorized');
+
+      redirectNow();
+      const redirected = await refusal(() => service.get(origin, found.room.id));
+      expect(redirected).toMatchObject({ status: 307, code: 'bad_response' });
+      expect(redirected.message).not.toContain('127.0.0.1');
+      // The other server was never asked anything, with or without the token.
+      expect(seen).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  it('gives up on an address nothing answers at, without saying more than that', async () => {
+    const { origin, close } = await served();
+    await close();
+    const service = createDealRoomService({ token: ROOM_TOKEN, allowLocalHttp: true, timeoutMs: 2000 });
+    expect(await refusal(() => service.list(origin, {}))).toMatchObject({ status: 0, code: 'unreachable', message: 'The deal room could not be reached.' });
   });
 });
 

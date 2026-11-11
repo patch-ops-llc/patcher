@@ -453,17 +453,20 @@ export function salesMessage(view: SalesView, appBaseUrl: string): SlackMessage 
         ]
           .filter(Boolean)
           .join('. ');
-        const lines = [
-          head('Penguin deal', company, liveRoom ? 'deal room is live · nothing written' : 'draft room has edits · nothing written'),
-          `${link} is final · approved${who}. ${why}`,
-        ];
+        const active = room.status === 'ACTIVE';
+        const state = active ? 'deal room is live' : liveRoom ? `deal room is ${room.status.toLowerCase()}` : edits ? 'draft room has edits' : 'draft room';
+        const lines = [head('Penguin deal', company, `${state} · nothing written`), `${link} is final · approved${who}. ${why || 'The room is a draft now'}`];
         if (liveRoom && !settings.publish) {
           return message([...lines, 'Publishing from Patcher is off, so the room stays as it is. Turn it on in Settings, or enter the text in Deal Admin'], [...roomButton('Open room'), ...tail]);
         }
         return withNext(
           lines,
-          liveRoom ? 'Write to live room' : 'Replace edits',
-          liveRoom ? 'Writing shows the new text at once to everyone who can open the room' : 'Writing replaces them. Clients cannot open a draft room',
+          active ? 'Write to live room' : liveRoom ? 'Write to room' : edits ? 'Replace edits' : 'Write to draft',
+          liveRoom
+            ? 'Writing shows the new text at once to everyone who can open the room'
+            : edits
+              ? 'Writing replaces them. Clients cannot open a draft room'
+              : 'Clients cannot open a draft room',
           roomButton('Open room'),
         );
       }

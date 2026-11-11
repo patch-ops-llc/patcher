@@ -278,8 +278,17 @@ describe('a deal on the service API route', () => {
     await work();
     expect(room.only().status).toBe('ACTIVE');
     expect(room.statusChanges()).toHaveLength(1);
-    expect((await agent.get(`/sales/deals/${deal.id}`)).text).toContain('Published');
+    const published = (await agent.get(`/sales/deals/${deal.id}`)).text;
+    expect(published).toContain('Published');
+    expect(published).toContain(`<a href="${ROOM_ORIGIN}/deals/larkfield-outfitters" rel="noreferrer">Room larkfield-outfitters</a>`);
     expect(await proposalForCall(pool, callId)).toMatchObject({ status: 'final' });
+
+    // An address that is not https (a local stand-in) is never a link, and the room is still named.
+    await pool.query(`UPDATE deal_room_updates SET room_url = 'http://localhost:4030/deals/larkfield-outfitters' WHERE id = $1`, [update!.id]);
+    const local = (await agent.get(`/sales/deals/${deal.id}`)).text;
+    expect(local).toContain('Room <code>larkfield-outfitters</code>');
+    expect(local).not.toContain('href="http://localhost:4030');
+    expect(local).not.toContain('no room yet');
     // No page that was drawn held the token.
     expect([before, after, dealPage, limited].join('')).not.toContain(ROOM_TOKEN);
   });

@@ -579,6 +579,53 @@ describe('a room that is already live', () => {
     expect(room.paths(room.only().id)).toEqual([]);
   });
 
+  it('names a closed room as closed, and writes without confirmLive once a person has made it a draft again', async () => {
+    await publishOn();
+    const { message, callId } = await liveRoom();
+    room.only().status = 'CLOSED';
+    await click(buttonOf(message, 'Approve'));
+    await work();
+    expect(linesOf(last())[0]).toBe('*Penguin deal* · Larkfield Outfitters · deal room is closed · nothing written');
+    expect(labels(last())).toEqual(['Open room', 'Write to room', 'Regenerate', 'Not Penguin']);
+    const first = (await current(callId)).next!;
+    expect(first.action.params).toMatchObject({ roomStatus: 'CLOSED' });
+
+    // A person sets the room back to draft in the deal room admin; the sync reads it.
+    room.only().status = 'DRAFT';
+    expect(await syncDealRoom(h.worker)).toBe('1 room read, 1 changed');
+    await work();
+    const { next, update } = await current(callId);
+    expect(update).toMatchObject({ status: 'held', room: { status: 'DRAFT' } });
+    expect((await pool.query<{ status: string }>('SELECT status FROM recommendations WHERE id = $1', [first.id])).rows[0]!.status).toBe('expired');
+    expect(next!.action.params).toMatchObject({ roomStatus: 'DRAFT' });
+    expect(linesOf(last()).slice(0, 3)).toEqual([
+      '*Penguin deal* · Larkfield Outfitters · draft room · nothing written',
+      `${link((await current(callId)).proposal)} is final · approved by <@${APPROVER}>. The room is a draft now`,
+      'Clients cannot open a draft room',
+    ]);
+
+    // The button of the message as it was before approves nothing.
+    await click(buttonOf(last(), 'Write to draft'));
+    await work();
+    expect(room.confirmed()).toEqual([]);
+    expect(room.statusChanges()).toEqual([]);
+    expect(room.paths(room.only().id)).toHaveLength(7);
+    expect((await current(callId)).update).toMatchObject({ status: 'draft_written' });
+  });
+
+  it('says so when the room is deleted in the deal room', async () => {
+    const { message, callId } = await liveRoom();
+    await click(buttonOf(message, 'Approve'));
+    await work();
+    room.deals.clear();
+    expect(await syncDealRoom(h.worker)).toBe('1 room read, 1 changed');
+    await work();
+    expect((await current(callId)).update).toMatchObject({ status: 'closed', error: 'The room no longer exists in the deal room.' });
+    expect(linesOf(last())[0]).toBe('*Penguin deal* · Larkfield Outfitters · deal room closed');
+    expect(labels(last())).toEqual(['Regenerate']);
+    expect(await auditActions(pool)).toContain('dealroom.api.closed');
+  });
+
   it('links a room a person made when its slug was saved on the deal, and still writes nothing to it while it is live', async () => {
     const first = await posted();
     const handmade = room.seed({ slug: 'larkfield', clientName: 'Larkfield', status: 'ACTIVE', memberCount: 2 });
