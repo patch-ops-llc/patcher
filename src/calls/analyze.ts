@@ -142,6 +142,8 @@ async function analyzeLocked(deps: WorkerDeps, callId: string, now: Date): Promi
   if (known.length) {
     await deps.pool.query(`UPDATE calls SET status = 'matched', hold_reason = NULL, status_detail = NULL, updated_at = now() WHERE id = $1`, [callId]);
     await deps.queue.enqueue('calls.suggest', { callId });
+    const settled = await getCall(deps.pool, callId);
+    if (settled) await afterCallAnalysed(deps, settled);
     return 'matched';
   }
 

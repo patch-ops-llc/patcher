@@ -146,6 +146,8 @@ async function classifyLocked(deps: WorkerDeps, callId: string): Promise<Classif
   // Classified already, or a person has said what it is: neither is asked of the model again.
   const existing = await getSalesCall(deps.pool, callId);
   if (existing && !(existing.state === 'held' && existing.heldStep === 'classify')) return 'skipped';
+  // Read before, and found not to be a sales call: the seam can fire again for a call that waited.
+  if (!existing && call.callType) return 'skipped';
   const transcript = await preferredTranscript(deps.pool, callId);
   if (!transcript?.text) return 'skipped';
 

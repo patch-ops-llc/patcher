@@ -28,6 +28,13 @@ export class FakeModel implements ModelClient {
   failBatch: Error | undefined;
   failPoll: Error | undefined;
   private responders = new Map<string, Responder>();
+  private interruptions = new Map<string, () => Promise<unknown>>();
+
+  /** Runs `fn` to its end while the next request for `tool` is on its way: what a person does during a model call. */
+  during(tool: string, fn: () => Promise<unknown>): this {
+    this.interruptions.set(tool, fn);
+    return this;
+  }
 
   /** Sets what the model answers when asked to call `tool`. */
   on(tool: string, answer: Answer): this {
@@ -51,13 +58,14 @@ export class FakeModel implements ModelClient {
     return { model: request.model, output: value, text: '', stopReason: 'tool_use', usage: usage() };
   }
 
-  complete(request: ModelRequest): Promise<ModelReply> {
+  async complete(request: ModelRequest): Promise<ModelReply> {
     this.completed.push(request);
-    try {
-      return Promise.resolve(this.answer(request));
-    } catch (err) {
-      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    const interruption = this.interruptions.get(request.tool.name);
+    if (interruption) {
+      this.interruptions.delete(request.tool.name);
+      await interruption();
     }
+    return this.answer(request);
   }
 
   createBatch(items: BatchItem[]): Promise<{ id: string }> {

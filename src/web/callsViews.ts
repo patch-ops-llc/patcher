@@ -13,6 +13,7 @@ import { hasRole } from '../settings/users.js';
 import { usd } from './aiViews.js';
 import type { SafeHtml } from './html.js';
 import { html } from './html.js';
+import { callTypeText } from './salesViews.js';
 import type { PageContext } from './views.js';
 import { csrf, layout, when } from './views.js';
 
@@ -74,12 +75,13 @@ export function callsPage(
         </p>
         ${data.calls.length
           ? html`<table>
-              <thead><tr><th>Call</th><th>When</th><th>Host</th><th>From</th><th>Project</th><th>Status</th><th>Suggestions</th></tr></thead>
+              <thead><tr><th>Call</th><th>When</th><th>Type</th><th>Host</th><th>From</th><th>Project</th><th>Status</th><th>Suggestions</th></tr></thead>
               <tbody>
                 ${data.calls.map(
                   (c) => html`<tr>
                     <td><a href="/calls/${c.id}">${c.title}</a>${c.durationSeconds ? html` <span class="muted small">${minutes(c.durationSeconds)}</span>` : ''}</td>
                     <td>${when(c.startedAt ?? c.createdAt)}</td>
+                    <td>${c.callType ? callTypeText(c) : html`<span class="muted">not read</span>`}</td>
                     <td>${c.hostEmail ?? html`<span class="muted">unknown</span>`}</td>
                     <td>${c.sources.map((s) => VENDOR_LABEL[s as keyof typeof VENDOR_LABEL] ?? s).join(' + ')}</td>
                     <td>${c.projects.length ? c.projects.join(', ') : html`<span class="muted">none</span>`}</td>
@@ -107,6 +109,8 @@ export interface CallPageData {
   users: Map<string, User>;
   /** The preferred copy's text, for checking a quote against what was said. */
   text: string | null;
+  /** The call's type and what the sales pipeline made of it, built by the sales screens. */
+  salesCard: SafeHtml;
 }
 
 function suggestionItem(s: CallSuggestion, data: CallPageData): SafeHtml {
@@ -229,6 +233,8 @@ export function callPage(ctx: PageContext, data: CallPageData): string {
           : ''}
       </section>
 
+      ${data.salesCard}
+
       <section class="card" id="people">
         <h2>Who was on it</h2>
         <p>Host: ${call.hostEmail ? html`<code>${call.hostEmail}</code>` : html`<span class="muted">not given by the source</span>`}</p>
@@ -251,13 +257,17 @@ export function callPage(ctx: PageContext, data: CallPageData): string {
       <section class="card" id="copies">
         <h2>Recordings of this call</h2>
         <table class="dense">
-          <thead><tr><th>From</th><th>Title</th><th>Started</th><th>Shape</th><th>Kept until</th><th></th></tr></thead>
+          <thead><tr><th>From</th><th>Title</th><th>Started</th><th>Addresses it carried</th><th>Shape</th><th>Kept until</th><th></th></tr></thead>
           <tbody>
             ${data.transcripts.map(
               (t) => html`<tr>
                 <td>${VENDOR_LABEL[t.source]}${t.isPreferred ? html` <span class="badge badge-done">analysed</span>` : html` <span class="muted small">duplicate</span>`}</td>
                 <td>${t.title}</td>
                 <td>${when(t.startedAt)}</td>
+                <td class="small">
+                  ${t.hostEmail ? html`<div>host <code>${t.hostEmail}</code></div>` : html`<div class="muted">no host address</div>`}
+                  ${t.attendees.filter((a) => a.email).map((a) => html`<div><code>${a.email}</code></div>`)}
+                </td>
                 <td class="muted small">${t.hasSpeakers ? 'speakers' : 'no speakers'}${t.hasTimestamps ? ', timestamps' : ''}</td>
                 <td>${t.purgedAt ? html`<span class="muted">text removed ${when(t.purgedAt)}</span>` : when(t.purgeAfter)}</td>
                 <td>${safeUrl(t.url) ? html`<a href="${t.url}" rel="noreferrer">Open at source</a>` : ''}</td>

@@ -123,7 +123,7 @@ export async function regenerate(deps: SalesDeps, input: CallInput & { note?: st
       // A retry keeps the note the failed draft was given.
       ...(input.note === undefined ? {} : { note: note || null, requestedBy: input.actor }),
     });
-    await recordAudit(tx, { actor: input.actor, action: 'proposal.regenerate', target: input.callId, after: { via: input.via, ...(note ? { note } : {}) } });
+    await recordAudit(tx, { actor: input.actor, action: 'call.proposal.regenerate', target: input.callId, after: { via: input.via, ...(note ? { note } : {}) } });
     await deps.queue.enqueue('sales.draft', { callId: input.callId }, { tx });
     await deps.queue.enqueue('sales.post', { callId: input.callId }, { tx });
     return done('Drafting again. The new version replaces this one when it is ready.');

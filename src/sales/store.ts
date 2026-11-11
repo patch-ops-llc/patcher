@@ -123,6 +123,37 @@ export async function listDeals(db: Queryable, limit = 200): Promise<DealListIte
   }));
 }
 
+/** A sales call as the Sales screen lists it. */
+export interface SalesCallItem extends SalesCall {
+  title: string;
+  startedAt: Date | null;
+}
+
+const itemFromRow = (r: SalesCallRow & { title: string; started_at: Date | null }): SalesCallItem => ({ ...salesCallFromRow(r), title: r.title, startedAt: r.started_at });
+
+/** Sales calls that are not settled: a question is open, a draft is on its way, or something is waiting. */
+export async function listOpenSalesCalls(db: Queryable, limit = 50): Promise<SalesCallItem[]> {
+  const { rows } = await db.query<SalesCallRow & { title: string; started_at: Date | null }>(
+    `SELECT s.*, c.title, c.started_at
+       FROM sales_calls s JOIN calls c ON c.id = s.call_id
+      WHERE c.status <> 'deleted' AND (s.state IN ('asked', 'drafting', 'held', 'failed') OR s.post_error IS NOT NULL)
+      ORDER BY s.updated_at DESC LIMIT $1`,
+    [limit],
+  );
+  return rows.map(itemFromRow);
+}
+
+export async function listDealCalls(db: Queryable, dealId: string): Promise<SalesCallItem[]> {
+  const { rows } = await db.query<SalesCallRow & { title: string; started_at: Date | null }>(
+    `SELECT s.*, c.title, c.started_at
+       FROM sales_calls s JOIN calls c ON c.id = s.call_id
+      WHERE s.deal_id = $1
+      ORDER BY coalesce(c.started_at, c.created_at) DESC LIMIT 50`,
+    [dealId],
+  );
+  return rows.map(itemFromRow);
+}
+
 // Proposals --------------------------------------------------------------------------------
 
 export async function getProposal(db: Queryable, id: string): Promise<Proposal | null> {

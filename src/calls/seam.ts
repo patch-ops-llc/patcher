@@ -2,19 +2,19 @@ import type { WorkerDeps } from '../worker/deps.js';
 import type { Call } from './types.js';
 
 /**
- * Where the sales phase attaches (design section 6). Nothing here classifies a call, drafts
- * a proposal or touches the deal room: this phase stops at the project match and the
- * suggested changes.
+ * Where the sales pipeline attaches (design section 6). The call pipeline knows nothing about
+ * sales: it matches a call to its project, and then tells whoever registered here.
  *
- * What the next phase finds ready:
+ * What a hook finds ready:
  *   - `calls.host_email` and `calls.attendees` ({ name, email, external }), normalised from
  *     both sources, which is what the Penguin rule of design 6.4 reads.
- *   - `calls.call_type` and `calls.call_type_conf`, reserved and never written here.
+ *   - `calls.call_type` and `calls.call_type_conf`, which only the sales pipeline writes.
  *   - `calls.summary`, and the preferred transcript through `preferredTranscript`.
- *   - this hook, called once per analysis with the call as it was stored.
  *
- * `afterCallAnalysed` runs after the match has been saved and its follow-up jobs enqueued,
- * outside that transaction. A hook that throws is logged and does not undo the match.
+ * `afterCallAnalysed` runs once the call's project question is settled (matched, asked, or
+ * no match), after that has been saved and its follow-up jobs enqueued, outside that
+ * transaction. A call that waited and was picked up again can reach it a second time, so a
+ * hook must be safe to repeat. A hook that throws is logged and does not undo the match.
  */
 export type CallAnalysedHook = (deps: WorkerDeps, call: Call) => Promise<void>;
 

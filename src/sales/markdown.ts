@@ -149,8 +149,16 @@ export function tablesToLists(markdown: string): string {
   return out.join('\n');
 }
 
-const MONEY =
-  /(?:(?:US|CA|AU)?\$|USD\s?|EUR\s?|GBP\s?|[€£])\s?\d[\d,]*(?:\.\d+)?\s?(?:k|m|bn|thousand|million)?\b|\b\d[\d,]*(?:\.\d+)?\s?(?:k|thousand|million)?\s?(?:dollars|usd|euros?|eur|pounds|gbp)\b/gi;
+const AMOUNT = String.raw`\d(?:[\d,]*\d)?(?:\.\d+)?`;
+const MONEY = new RegExp(
+  [
+    // "$45,000", "USD 1,500", "€2.5k", "$3 million"
+    String.raw`(?:(?:US|CA|AU)?\$|USD\s?|EUR\s?|GBP\s?|[€£])\s?${AMOUNT}(?:\s?(?:k|m|bn|thousand|million)\b)?`,
+    // "1,500 USD", "40 thousand dollars"
+    String.raw`\b${AMOUNT}(?:\s?(?:k|thousand|million))?\s?(?:dollars|usd|euros?|eur|pounds|gbp)\b`,
+  ].join('|'),
+  'gi',
+);
 
 /**
  * Guardrail 4 (no invented commercial terms): an amount of money in text the model wrote

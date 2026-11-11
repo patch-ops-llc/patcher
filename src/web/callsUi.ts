@@ -26,6 +26,7 @@ import { hasRole } from '../settings/users.js';
 import type { UiHelpers } from './auditUi.js';
 import { callPage, callsPage, callsSettingsCard, uploadPage } from './callsViews.js';
 import type { WebDeps } from './deps.js';
+import { callSales } from './salesUi.js';
 import type { SafeHtml } from './html.js';
 import type { PageContext } from './views.js';
 import { errorPage } from './views.js';
@@ -138,6 +139,7 @@ export function callRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void {
         domains: externalDomains(call, parseDomains(settings['calls.internal_domains'])),
         users,
         text: preferred?.text ?? null,
+        salesCard: await callSales(deps, ctx, call),
       }),
     );
   });
