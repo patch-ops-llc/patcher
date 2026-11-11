@@ -6,10 +6,13 @@ import type { Logger } from '../log.js';
 import type { Enqueuer } from '../queue/queue.js';
 import type { Catalog } from '../recommendations/catalog.js';
 import { decide } from '../recommendations/service.js';
+import { RESERVED_SLUGS, ROOM_SLUG } from '../dealroom/service.js';
+import { getSetting } from '../settings/settings.js';
+import { followUpNeeded, loadSalesView } from './delivery.js';
 import { canDecide, getUser } from '../settings/users.js';
 import { cleanMarkdown, splitProposal } from './markdown.js';
 import { renderProposalPdf } from './pdf.js';
-import { bumpSalesVersion, closeSalesRecommendations, getDeal, getProposal, getSalesCall, insertProposal, isUuid, offerFor, proposalForCall, setSalesState, sha256 } from './store.js';
+import { bumpSalesVersion, closeSalesRecommendations, getDeal, getProposal, getSalesCall, insertProposal, isUuid, offerFor, proposalForCall, setSalesState, sha256, updateForProposal } from './store.js';
 import type { Deal, DealRow, Proposal, SalesCall, SalesCallRow } from './types.js';
 import { PROPOSAL_KIND, SLUG, dealFromRow, isSalesType, salesCallFromRow } from './types.js';
 
@@ -191,14 +194,35 @@ export function setPenguin(deps: SalesDeps, input: DealInput & { penguin: boolea
   });
 }
 
-/** The slug of the room a person created in the deal room app. Patcher cannot create a room or look one up. */
+/**
+ * The slug of the deal's room. On the pull request route it is the room a person created in
+ * the deal room app, and it is needed. On the service API route it is optional: it names a
+ * room that already exists, to be linked to the deal, or the slug a new room should get.
+ * An empty slug takes it off the deal.
+ */
 export function setDealRoomSlug(deps: SalesDeps, input: DealInput & { slug: string }): Promise<SalesResult> {
   const slug = input.slug.trim().toLowerCase();
   return changeDeal(deps, input, async (tx, deal) => {
+    if (!slug) {
+      if (!deal.dealRoomSlug) return { refused: 'No slug is saved for this deal.' };
+      await tx.query('UPDATE deals SET deal_room_slug = NULL, updated_at = now() WHERE id = $1', [deal.id]);
+      return { audit: 'deal.slug', after: { slug: null }, reason: 'Closed: the deal room slug was removed.', said: 'Removed. The proposal is offered again without a slug.' };
+    }
     if (!SLUG.test(slug)) return { refused: 'A slug is lower-case letters, digits and dashes, like "northwind". It is the last part of the room\'s address.' };
+    const viaApi = (await getSetting(tx, 'sales.dealroom_route')) === 'api';
+    if (viaApi && (!ROOM_SLUG.test(slug) || RESERVED_SLUGS.includes(slug))) {
+      return { refused: 'The deal room takes a slug of lower-case letters and digits with single dashes between them, at most 60, and not one of its own words such as "admin" or "new".' };
+    }
     if (deal.dealRoomSlug === slug && !deal.dealRoomSkipped) return { refused: 'That slug is already saved.' };
     await tx.query('UPDATE deals SET deal_room_slug = $2, deal_room_skipped = false, updated_at = now() WHERE id = $1', [deal.id, slug]);
-    return { audit: 'deal.slug', after: { slug }, reason: 'Closed: the deal room slug was set.', said: `Saved. Approving the proposal now opens a pull request for content/${slug}/.` };
+    return {
+      audit: 'deal.slug',
+      after: { slug },
+      reason: 'Closed: the deal room slug was set.',
+      said: viaApi
+        ? `Saved. Approving the proposal now writes to the room "${slug}": a room with that slug is linked to this deal, or a draft room is created with it.`
+        : `Saved. Approving the proposal now opens a pull request for content/${slug}/.`,
+    };
   });
 }
 
@@ -208,6 +232,50 @@ export function skipDealRoom(deps: SalesDeps, input: DealInput): Promise<SalesRe
     if (deal.dealRoomSkipped) return { refused: 'Already skipped.' };
     await tx.query('UPDATE deals SET deal_room_skipped = true, updated_at = now() WHERE id = $1', [deal.id]);
     return { audit: 'deal.dealroom.skip', after: { skipped: true }, reason: 'Closed: the deal room was skipped for this deal.', said: 'Skipped. The proposal can be approved without a deal room.' };
+  });
+}
+
+/**
+ * "Offer again": an approval for the deal room that was not decided in time, was dismissed,
+ * or ran in dry run is asked for again. It changes nothing in the deal room.
+ */
+export async function reofferDealRoom(deps: SalesDeps, input: CallInput): Promise<SalesResult> {
+  if (!isUuid(input.callId)) return refuse('That call no longer exists.');
+  if (!(await maySell(deps.pool, input.actor))) return refuse(NOT_APPROVER);
+  return withTx(deps.pool, async (tx): Promise<SalesResult> => {
+    const sales = await lockSales(tx, input.callId);
+    if (!sales) return refuse('That call is not in the sales pipeline.');
+    if (isStale(sales, input.expectedVersion)) return refuse(STALE);
+    const proposal = await proposalForCall(tx, input.callId);
+    const update = proposal?.status === 'final' ? await updateForProposal(tx, proposal.id) : null;
+    if (!update || update.route !== 'api' || (update.status !== 'held' && update.status !== 'draft_written')) return refuse('Nothing is waiting for the deal room.');
+    const view = await loadSalesView(tx, input.callId);
+    if (!view || !followUpNeeded(view)) {
+      return refuse('Nothing can be offered for the deal room as things are. Publishing from Patcher is off in Settings, or the room is no longer the one that was written.');
+    }
+    await closeSalesRecommendations(tx, input.callId, { reason: 'Closed: offered again.', actor: input.actor });
+    await bumpSalesVersion(tx, [input.callId]);
+    await recordAudit(tx, { actor: input.actor, action: 'dealroom.reoffer', target: update.id, after: { via: input.via } });
+    await deps.queue.enqueue('sales.post', { callId: input.callId }, { tx });
+    return done('Offered again. The message in the sales channel has the button.');
+  });
+}
+
+/**
+ * After the owner changes how the deal room is reached, or the publish setting: what the
+ * open Penguin deals had waiting was offered under the old setting, so it is closed and
+ * each message is drawn again for the new one.
+ */
+export async function refreshDealRoomOffers(deps: SalesDeps, actor: Actor, reason: string): Promise<number> {
+  return withTx(deps.pool, async (tx) => {
+    const { rows } = await tx.query<{ id: string }>(
+      `SELECT DISTINCT d.id
+         FROM deals d JOIN sales_calls s ON s.deal_id = d.id
+        WHERE d.is_penguin IS TRUE AND NOT d.deal_room_skipped AND s.state = 'drafted' AND s.updated_at > now() - interval '90 days'
+        LIMIT 200`,
+    );
+    for (const row of rows) await refreshDeal(deps, tx, row.id, reason, actor);
+    return rows.length;
   });
 }
 

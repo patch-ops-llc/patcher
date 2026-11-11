@@ -279,6 +279,7 @@ describe('Audits in the control UI', () => {
       cursor: { configured: true, lastOkAt: null },
       anthropic: { configured: false, lastOkAt: null },
       dealroom: { configured: false, lastOkAt: null },
+      dealroom_api: { configured: false, lastOkAt: null },
     });
   });
 });

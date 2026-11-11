@@ -94,6 +94,42 @@ describe('configuration', () => {
     expect(() => loadWorkerConfig({ ...required, NODE_ENV: 'production', ANTHROPIC_API_URL: 'http://localhost:4020' })).toThrow(/ANTHROPIC_API_URL/);
   });
 
+  it('gives the deal room token to the worker only, and keeps it out of an error', () => {
+    const worker = loadWorkerConfig({ ...required });
+    expect(worker.dealRoomServiceToken).toBeUndefined();
+    expect(worker.features.dealroom_api).toEqual({ configured: false, missing: ['DEALROOM_API_TOKEN'] });
+
+    const token = 'made-up-dealroom-token-0123456789abcdef';
+    const withToken = loadWorkerConfig({ ...required, NODE_ENV: 'production', DEALROOM_API_TOKEN: token });
+    expect(withToken.dealRoomServiceToken).toBe(token);
+    expect(withToken.features.dealroom_api).toEqual({ configured: true, missing: [] });
+
+    // The public service never reads it, and in production refuses to start while it is set there.
+    expect(loadWebConfig({ ...required, DEALROOM_API_TOKEN: token })).not.toHaveProperty('dealRoomServiceToken');
+    expect(JSON.stringify(loadWebConfig({ ...required, DEALROOM_API_TOKEN: token }))).not.toContain(token);
+    let refused = '';
+    try {
+      loadWebConfig({ ...required, NODE_ENV: 'production', DEALROOM_API_TOKEN: token });
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      refused = (err as Error).message;
+    }
+    expect(refused).toBe('DEALROOM_API_TOKEN must be set on the worker only. Remove it from the web service.');
+    expect(loadWebConfig({ ...required, NODE_ENV: 'production', DEALROOM_API_TOKEN: '  ' }).isProduction).toBe(true);
+
+    // Shorter than the deal room accepts, or with a space or a line break in it.
+    for (const bad of ['too-short-TOKENVALUE', `${'a'.repeat(20)} ${'b'.repeat(20)}TOKENVALUE`, `${'a'.repeat(40)}\nTOKENVALUE`]) {
+      let message = '';
+      try {
+        loadWorkerConfig({ ...required, DEALROOM_API_TOKEN: bad });
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toContain('DEALROOM_API_TOKEN');
+      expect(message).not.toContain('TOKENVALUE');
+    }
+  });
+
   it('refuses the development-only Slack overrides in production', () => {
     const production = { ...required, NODE_ENV: 'production' };
     expect(() => loadWebConfig({ ...production, SLACK_API_URL: 'http://localhost:4010/api/' })).toThrow(/SLACK_API_URL/);

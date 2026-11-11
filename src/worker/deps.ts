@@ -6,7 +6,7 @@ import type { Catalog } from '../recommendations/catalog.js';
 import type { ModelClient } from '../ai/client.js';
 import type { FeatureStatus } from '../config.js';
 import type { CursorClient } from '../cursor/client.js';
-import type { DealRoomAdapter } from '../dealroom/adapter.js';
+import type { DealRoomAdapter, ServiceDealRoomAdapter } from '../dealroom/adapter.js';
 import type { GitHubClient } from '../github/client.js';
 import type { SlackReaderFactory } from '../inbox/reader.js';
 import type { TranscriptSource } from '../calls/sources/source.js';
@@ -32,17 +32,19 @@ export interface Integrations {
    * connection it is for, opened from the database.
    */
   transcripts: Record<Vendor, TranscriptSource>;
-  /**
-   * The Penguin deal room. In this phase it is the repository route: content files in a pull
-   * request. The app's service API (phase 3b) is a second adapter behind the same interface.
-   */
+  /** The Penguin deal room through its repository: content files in a pull request that a person merges. */
   dealRoom: DealRoomAdapter | null;
+  /**
+   * The Penguin deal room through its service API. It holds the bot token, which exists in
+   * the worker only. Settings says which of the two an approved proposal uses.
+   */
+  dealRoomApi: ServiceDealRoomAdapter | null;
   /**
    * Reads the hub workspace as the person who authorised it. It holds no token: each call is
    * given the token of the workspace it is for, opened from the database. Read methods only.
    */
   slackReader: SlackReaderFactory;
-  status: { railway: FeatureStatus; github: FeatureStatus; cursor: FeatureStatus; anthropic: FeatureStatus; dealroom: FeatureStatus };
+  status: { railway: FeatureStatus; github: FeatureStatus; cursor: FeatureStatus; anthropic: FeatureStatus; dealroom: FeatureStatus; dealroom_api: FeatureStatus };
 }
 
 /** What every job handler in the worker is given. */

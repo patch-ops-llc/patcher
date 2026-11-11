@@ -8,6 +8,7 @@ export const INTEGRATIONS = {
   cursor: 'Cursor',
   anthropic: 'Anthropic',
   dealroom: 'Penguin deal room',
+  dealroom_api: 'Penguin deal room API',
 } as const;
 export type IntegrationName = keyof typeof INTEGRATIONS;
 

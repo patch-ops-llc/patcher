@@ -53,6 +53,8 @@ const workerSchema = baseSchema.extend({
   DEALROOM_GITHUB_APP_ID: optional(z.string().regex(/^[A-Za-z0-9]+$/)),
   DEALROOM_GITHUB_APP_PRIVATE_KEY: optional(z.string().min(100)),
   DEALROOM_GITHUB_APP_INSTALLATION_ID: optional(z.string().regex(/^\d+$/)),
+  // The deal room's service API: the same value as OPS_BOT_TOKEN on the deal room. Worker only.
+  DEALROOM_API_TOKEN: optional(z.string().min(32).max(512).regex(/^[\x21-\x7e]+$/)),
   // The model steps of the audit. Without it the audit ranks by its rules and says so.
   ANTHROPIC_API_KEY: optional(z.string().min(20)),
   // Development and test only: point the clients at local fakes.
@@ -116,6 +118,10 @@ export function loadWebConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = parse(webSchema, env);
   if (parsed.NODE_ENV === 'production' && parsed.SLACK_OIDC_URL) {
     throw new ConfigError('SLACK_OIDC_URL must not be set in production');
+  }
+  // The public service makes no call to the deal room and must not be able to.
+  if (parsed.NODE_ENV === 'production' && env.DEALROOM_API_TOKEN !== undefined && env.DEALROOM_API_TOKEN.trim() !== '') {
+    throw new ConfigError('DEALROOM_API_TOKEN must be set on the worker only. Remove it from the web service.');
   }
   const base = common(parsed);
   return {
@@ -209,6 +215,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
           }
         : undefined,
     dealRoomApiUrl: parsed.DEALROOM_GITHUB_API_URL,
+    /** The bearer token for the deal room's service API. Never logged, never sent to web. */
+    dealRoomServiceToken: parsed.DEALROOM_API_TOKEN,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY,
     anthropicApiUrl: parsed.ANTHROPIC_API_URL,
     calendlyApiUrl: parsed.CALENDLY_API_URL,
@@ -230,6 +238,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
       anthropic: feature({ ANTHROPIC_API_KEY: parsed.ANTHROPIC_API_KEY }),
       /** Opening a content pull request on the Penguin deal room's repository after approval. */
       dealroom: feature(dealRoomVars),
+      /** Writing an approved proposal to the deal room through its service API. */
+      dealroom_api: feature({ DEALROOM_API_TOKEN: parsed.DEALROOM_API_TOKEN }),
     },
   };
 }

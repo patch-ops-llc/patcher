@@ -25,6 +25,7 @@ export interface DealRoomFile {
 }
 
 export interface PreparedUpdate {
+  /** The content folder, on the pull request route. Empty on the service API route. */
   slug: string;
   files: DealRoomFile[];
   /** One hash over every path and content, which the approval is bound to. */
@@ -39,6 +40,9 @@ const MAX_FILE_BYTES = 100_000;
 const OVERVIEW_HEADING = /^(summary|overview|executive summary)$/i;
 
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
+
+/** One hash over every path and content hash, in order. What an approval of the files is bound to. */
+export const filesHashOf = (files: { path: string; hash: string }[]): string => sha256(JSON.stringify(files.map((f) => [f.path, f.hash])));
 
 /** A heading as a frontmatter value that any YAML reader, or a plain line reader, takes the same way. */
 export function frontmatterTitle(heading: string): string {
@@ -55,9 +59,10 @@ export function visualsFor(): DealRoomFile[] {
   return [];
 }
 
-export function prepareFiles(input: { slug: string; title: string; contentMd: string }): PreparedUpdate {
+/** `slug` names the content folder on the pull request route. The service API route has none to give. */
+export function prepareFiles(input: { slug?: string; title: string; contentMd: string }): PreparedUpdate {
   const problems: string[] = [];
-  if (!SLUG.test(input.slug)) problems.push('The deal room slug is not valid.');
+  if (input.slug !== undefined && !SLUG.test(input.slug)) problems.push('The deal room slug is not valid.');
   const doc = splitProposal(input.contentMd);
   const files: DealRoomFile[] = [];
   const add = (path: string, content: string) => files.push({ path, content, hash: sha256(content) });
@@ -85,9 +90,9 @@ export function prepareFiles(input: { slug: string; title: string; contentMd: st
   }
 
   return {
-    slug: input.slug,
+    slug: input.slug ?? '',
     files,
-    filesHash: sha256(JSON.stringify(files.map((f) => [f.path, f.hash]))),
+    filesHash: filesHashOf(files),
     sections: doc.sections.length,
     problems,
   };

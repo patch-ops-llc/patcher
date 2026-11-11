@@ -2,6 +2,8 @@ import type { Call } from '../calls/types.js';
 import type { PreparedUpdate } from '../dealroom/files.js';
 import type { IntegrationStatus } from '../integrations/status.js';
 import type { Recommendation } from '../recommendations/types.js';
+import { audienceText } from '../sales/catalog.js';
+import type { RoomSettings } from '../sales/delivery.js';
 import { formatMoney } from '../sales/draft.js';
 import type { DealListItem, SalesCallItem } from '../sales/store.js';
 import type { Brief, CatalogItem, Deal, DealRoomUpdate, Proposal, ProposalStatus, Quoted, SalesCall, SalesState } from '../sales/types.js';
@@ -35,7 +37,8 @@ const SALES_STATE: Record<SalesState, [string, string]> = {
 const UPDATE_STATUS: Record<DealRoomUpdate['status'], [string, string]> = {
   prepared: ['executing', 'Opening'],
   pr_open: ['posted', 'Pull request open'],
-  draft_written: ['posted', 'Draft written'],
+  draft_written: ['posted', 'In a draft room'],
+  held: ['drafted', 'Waiting: not written'],
   published: ['done', 'Published'],
   merged: ['done', 'Merged'],
   closed: ['dismissed', 'Closed without merging'],
@@ -46,6 +49,16 @@ const badge = ([style, label]: [string, string]): SafeHtml => html`<span class="
 const name = (users: Map<string, User>, id: string | null): string => (id === null || id === 'system' ? 'Patcher' : (users.get(id)?.displayName ?? id));
 const safeUrl = (url: string | null | undefined): url is string => Boolean(url && /^https:\/\//.test(url));
 const maySell = (ctx: PageContext): boolean => hasRole(ctx.session.user, 'approver') && canDecide(ctx.session.user, 'proposal');
+const mayPublish = (ctx: PageContext): boolean => hasRole(ctx.session.user, 'approver') && canDecide(ctx.session.user, 'dealroom_publish');
+
+const CHANGE_LABEL: Record<DealRoomUpdate['changes'][number]['change'], string> = {
+  add: 'new',
+  replace: 'replaces what is there',
+  same: 'already the same',
+  remove: 'removed',
+  keep: 'left as it is',
+};
+const AUTHOR_LABEL = { service: 'Patcher', person: 'a person', repository: 'the repository' } as const;
 
 /** "Sales: discovery (0.84)", or how a person set it. */
 export function callTypeText(call: Pick<Call, 'callType' | 'callTypeConf'>): string {
@@ -145,8 +158,9 @@ export function salesPage(
                         : html`<span class="muted">none</span>`}
                     </td>
                     <td>
-                      ${d.updateStatus ? badge(UPDATE_STATUS[d.updateStatus]) : d.isPenguin ? (d.dealRoomSkipped ? html`<span class="muted">skipped</span>` : d.dealRoomSlug ? html`<code>${d.dealRoomSlug}</code>` : html`<span class="muted">no slug yet</span>`) : ''}
+                      ${d.updateStatus ? badge(UPDATE_STATUS[d.updateStatus]) : d.isPenguin ? (d.dealRoomSkipped ? html`<span class="muted">skipped</span>` : d.dealRoomSlug ? html`<code>${d.dealRoomSlug}</code>` : html`<span class="muted">${data.settings['sales.dealroom_route'] === 'api' ? 'no room yet' : 'no slug yet'}</span>`) : ''}
                       ${safeUrl(d.prUrl) ? html` <a href="${d.prUrl}" rel="noreferrer">pull request</a>` : ''}
+                      ${safeUrl(d.roomUrl) ? html` <a href="${d.roomUrl}" rel="noreferrer">room</a>` : ''}
                     </td>
                     <td>${d.calls}</td>
                     <td>${when(d.updatedAt)}</td>
@@ -176,14 +190,27 @@ function updatesTable(updates: DealRoomUpdate[]): SafeHtml {
         (u) => html`<tr>
           <td>${when(u.createdAt)}</td>
           <td>
-            ${safeUrl(u.prUrl) ? html`<a href="${u.prUrl}" rel="noreferrer">Pull request${u.prNumber ? ` #${u.prNumber}` : ''}</a>` : html`<span class="muted">not opened</span>`}
-            <div class="muted small"><code>${u.repo ?? ''}</code> · content/${u.slug}/${u.branch ? html` · branch <code>${u.branch}</code>` : ''}</div>
+            ${u.route === 'api'
+              ? html`${safeUrl(u.roomUrl) ? html`<a href="${u.roomUrl}" rel="noreferrer">Room${u.slug ? ` ${u.slug}` : ''}</a>` : html`<span class="muted">no room yet</span>`}
+                  <div class="muted small">
+                    Service API · <code>${u.origin ?? ''}</code>${u.room ? html` · the room was ${u.room.status} when last read, open to ${audienceText(u.room)}` : ''}
+                  </div>`
+              : html`${safeUrl(u.prUrl) ? html`<a href="${u.prUrl}" rel="noreferrer">Pull request${u.prNumber ? ` #${u.prNumber}` : ''}</a>` : html`<span class="muted">not opened</span>`}
+                  <div class="muted small"><code>${u.repo ?? ''}</code> · content/${u.slug}/${u.branch ? html` · branch <code>${u.branch}</code>` : ''}</div>`}
           </td>
           <td>${badge(UPDATE_STATUS[u.status])}${u.error ? html`<div class="bad small">${u.error}</div>` : ''}</td>
           <td>
             <details>
               <summary>${u.files.length} ${u.files.length === 1 ? 'file' : 'files'}</summary>
               <ul>${u.files.map((f) => html`<li><code>${f.path}</code></li>`)}</ul>
+              ${u.changes.length
+                ? html`<p><strong>${u.status === 'held' ? 'What writing would do in the room' : 'What the write did in the room'}</strong></p>
+                    <ul>
+                      ${u.changes.map(
+                        (c) => html`<li><code>${c.path}</code>: ${CHANGE_LABEL[c.change]}${c.by ? html` <span class="muted">(there now: written by ${AUTHOR_LABEL[c.by]})</span>` : ''}</li>`,
+                      )}
+                    </ul>`
+                : ''}
               ${u.manualSteps.length ? html`<p><strong>Still to do by hand</strong></p><ul>${u.manualSteps.map((s) => html`<li>${s}</li>`)}</ul>` : ''}
             </details>
           </td>
@@ -202,11 +229,21 @@ export function dealPage(
     calls: SalesCallItem[];
     users: Map<string, User>;
     repo: string;
+    room: RoomSettings;
+    /** The integration the chosen route uses: the GitHub App, or the service API token. */
     dealRoom: IntegrationStatus | undefined;
   },
 ): string {
   const { deal } = data;
   const seller = maySell(ctx);
+  const viaApi = data.room.route === 'api';
+  const slugForm = (label: string, required: boolean): SafeHtml =>
+    html`<form method="post" action="/sales/deals/${deal.id}/slug" class="row add">
+      ${csrf(ctx)}
+      <input name="slug" maxlength="63" ${required ? 'required' : ''} pattern="[a-z0-9][a-z0-9-]*" value="${deal.dealRoomSlug ?? ''}" placeholder="the room's slug, e.g. northwind" aria-label="Deal room slug" />
+      <button type="submit">${label}</button>
+    </form>`;
+  const skipForm = deal.dealRoomSkipped ? '' : html`<form method="post" action="/sales/deals/${deal.id}/skip">${csrf(ctx)}<button type="submit">Skip the deal room for this deal</button></form>`;
   return layout(
     ctx,
     deal.company,
@@ -223,7 +260,33 @@ export function dealPage(
 
       <section class="card" id="dealroom">
         <h2>Deal room</h2>
-        ${deal.isPenguin === true
+        ${deal.isPenguin === true && viaApi
+          ? html`<p>
+                Service API at <code>${data.room.origin || 'no address saved'}</code> ·
+                ${deal.dealRoomSkipped
+                  ? html`<strong>skipped for this deal</strong>`
+                  : deal.dealRoomRef
+                    ? html`linked to room <code>${deal.dealRoomRef}</code>${deal.dealRoomSlug ? html`, slug saved here: <code>${deal.dealRoomSlug}</code>` : ''}`
+                    : deal.dealRoomSlug
+                      ? html`not linked yet · slug saved here: <code>${deal.dealRoomSlug}</code>`
+                      : html`<strong>no room yet</strong>`}
+              </p>
+              ${data.dealRoom?.configured === false
+                ? html`<div class="flash flash-error">
+                    The deal room API token is not set on the worker (${data.dealRoom.missing.join(', ')}), so an approved proposal cannot be written to the deal room yet.
+                  </div>`
+                : ''}
+              ${data.room.origin ? '' : html`<div class="flash flash-error">The deal room address is not saved in <a href="/settings#sales">Settings</a>, so the proposal cannot be offered for the deal room.</div>`}
+              ${seller ? html`${slugForm('Save slug', false)} ${skipForm}` : ''}
+              <p class="muted small">
+                After the proposal is approved, Patcher finds this deal's room by its own reference or creates it as a draft, and writes the files there.
+                Nothing is sent to the deal room before the approval. A slug is optional: save one to use a room that already exists (it is linked to
+                this deal on approval), or to choose the slug of the new room. Save it empty to remove it.
+                ${data.room.publish
+                  ? 'Publishing a draft room, and writing to a room that is already live, are each offered as their own approval.'
+                  : 'Publishing from Patcher is off: it writes only into draft rooms, never changes a room\'s status, and never writes to a live room.'}
+              </p>`
+          : deal.isPenguin === true
           ? html`<p>
                 Repository <code>${data.repo}</code> ·
                 ${deal.dealRoomSkipped
@@ -237,14 +300,7 @@ export function dealPage(
                     The deal room GitHub App is not configured on the worker (${data.dealRoom.missing.join(', ')}), so an approved proposal cannot open a pull request yet.
                   </div>`
                 : ''}
-              ${seller
-                ? html`<form method="post" action="/sales/deals/${deal.id}/slug" class="row add">
-                      ${csrf(ctx)}
-                      <input name="slug" maxlength="63" required pattern="[a-z0-9][a-z0-9-]*" value="${deal.dealRoomSlug ?? ''}" placeholder="the room's slug, e.g. northwind" aria-label="Deal room slug" />
-                      <button type="submit">Save slug</button>
-                    </form>
-                    ${deal.dealRoomSkipped ? '' : html`<form method="post" action="/sales/deals/${deal.id}/skip">${csrf(ctx)}<button type="submit">Skip the deal room for this deal</button></form>`}`
-                : ''}
+              ${seller ? html`${slugForm('Save slug', true)} ${skipForm}` : ''}
               <p class="muted small">
                 Patcher cannot create a room. Create it in the deal room's admin with no client domains, then save its slug here.
                 Approving the proposal then opens a pull request with the content files. Patcher never merges it.
@@ -332,6 +388,72 @@ export interface ProposalPageData {
   files: PreparedUpdate | null;
   users: Map<string, User>;
   currency: string;
+  room: RoomSettings;
+  /** The approval that follows the deal room update: writing files that were held, or publishing the draft room. */
+  followUp: Recommendation | null;
+  followUpDescription: string | null;
+}
+
+/** What stands between an approved proposal and the room, on the service API route, and the approval that moves it on. */
+function roomCard(ctx: PageContext, data: ProposalPageData): SafeHtml {
+  const update = data.updates[0];
+  if (!update || update.route !== 'api' || (update.status !== 'held' && update.status !== 'draft_written')) return html``;
+  const { followUp, proposal } = data;
+  const held = update.status === 'held';
+  const live = update.room ? update.room.status !== 'DRAFT' : false;
+  const approver = mayPublish(ctx);
+  const again = proposal.callId && maySell(ctx) ? html`<form method="post" action="/sales/calls/${proposal.callId}/reoffer">${csrf(ctx)}<button type="submit">Offer again</button></form>` : '';
+  const what = held ? (live ? 'Write to the live room' : 'Replace the edits in the draft room') : 'Publish';
+  let next: SafeHtml;
+  if (!followUp) {
+    next =
+      (held && live && !data.room.publish) || (!held && !data.room.publish)
+        ? html`<p class="muted">
+            Publishing from Patcher is off in <a href="/settings#sales">Settings</a>, so nothing more is offered here.
+            ${held ? 'The room stays as it is; enter the text in Deal Admin, or switch the setting on.' : 'A person publishes the room in the deal room admin.'}
+          </p>`
+        : html`<p class="muted">The approval for the next step is being prepared. Reload in a moment.</p>`;
+  } else if (followUp.status === 'posted') {
+    next = html`<p>${data.followUpDescription ?? ''}</p>
+      ${approver
+        ? html`<div class="row">
+            <form method="post" action="/approvals/${followUp.id}/approve">${csrf(ctx)}<input type="hidden" name="hash" value="${followUp.actionHash}" /><button class="primary" type="submit">${what}</button></form>
+            <a href="/approvals/${followUp.id}">Details of the approval</a>
+          </div>`
+        : html`<p class="muted">Waiting for an approver.</p>`}`;
+  } else if (followUp.status === 'failed') {
+    next = html`<div class="flash flash-error">
+      Approved, and the action failed: ${followUp.lastError ?? 'no reason recorded'}
+      ${approver ? html`<form method="post" action="/approvals/${followUp.id}/retry">${csrf(ctx)}<input type="hidden" name="hash" value="${followUp.actionHash}" /><button type="submit">Retry</button></form>` : ''}
+    </div>`;
+  } else if (followUp.status === 'approved' || followUp.status === 'executing') {
+    next = html`<div class="flash flash-info">Approved. Working on it; reload in a moment.</div>`;
+  } else if (followUp.status === 'drafted') {
+    next = html`<div class="flash flash-info">Waiting to be posted to the sales channel. It can be approved once it is there.</div>`;
+  } else {
+    next = html`<div class="flash flash-info">
+      ${followUp.status === 'done' ? 'Approved in dry run, so nothing was changed.' : followUp.status === 'dismissed' ? 'The approval was dismissed.' : 'The approval was not decided in time, or was closed.'}
+      ${again}
+    </div>`;
+  }
+  return html`<section class="card" id="room">
+    <h2>${held ? 'Deal room: approved, not written' : 'Deal room: draft ready'}</h2>
+    ${held
+      ? html`<p>
+          The proposal is final and its files are held in Patcher.
+          ${live && update.room ? html`The room is <strong>${update.room.status}</strong>, open to ${audienceText(update.room)}: anything written shows to them at once.` : ''}
+          ${update.hold && update.hold.replaces.length + update.hold.removes.length
+            ? html`A person edited these files in the room, and writing would replace or remove them:
+                ${[...update.hold.replaces, ...update.hold.removes].map((path) => html`<code>${path}</code> `)}`
+            : ''}
+        </p>`
+      : html`<p>
+          The proposal is in a draft room, which clients cannot open.
+          ${safeUrl(update.roomUrl) ? html`<a href="${update.roomUrl}" rel="noreferrer">Preview it in the deal room</a>.` : ''}
+          ${update.room ? html`Once published it is open to ${audienceText(update.room)}.` : ''}
+        </p>`}
+    ${next}
+  </section>`;
 }
 
 function offerCard(ctx: PageContext, data: ProposalPageData): SafeHtml {
@@ -377,7 +499,12 @@ function offerCard(ctx: PageContext, data: ProposalPageData): SafeHtml {
       ${seller ? penguinForms(ctx, deal) : ''}
     </div>`;
   }
-  if (deal.isPenguin && !deal.dealRoomSkipped && !deal.dealRoomSlug) {
+  if (deal.isPenguin && !deal.dealRoomSkipped && data.room.route === 'api' && !data.room.origin) {
+    return html`<div class="flash flash-info">
+      Before this can be approved: the deal room address is needed. <a href="/settings#sales">Save it in Settings</a>, or switch the deal room back to pull requests there.
+    </div>`;
+  }
+  if (deal.isPenguin && !deal.dealRoomSkipped && data.room.route !== 'api' && !deal.dealRoomSlug) {
     return html`<div class="flash flash-info">
       Before this can be approved: the deal room's slug is needed. <a href="/sales/deals/${deal.id}#dealroom">Enter it, or skip the deal room, on the deal</a>.
     </div>`;
@@ -408,6 +535,7 @@ export function proposalPage(ctx: PageContext, data: ProposalPageData): string {
       </p>
       <p>${penguinMark(deal, data.users)}</p>
       ${offerCard(ctx, data)}
+      ${roomCard(ctx, data)}
 
       ${proposal.gaps.length || proposal.flags.length
         ? html`<section class="card" id="check">
@@ -459,7 +587,9 @@ export function proposalPage(ctx: PageContext, data: ProposalPageData): string {
         ? html`<section class="card" id="files">
             <h2>Deal room files</h2>
             <p class="muted">
-              What approving would put in a pull request under <code>content/${data.files.slug}/</code>. An <code>overview.md</code> already in the room is left as it is.
+              ${data.room.route === 'api'
+                ? html`What approving would write to the deal room through its service API, if the room is a draft. An <code>overview.md</code> a person wrote is left as it is, and nothing is sent before the approval.`
+                : html`What approving would put in a pull request under <code>content/${data.files.slug}/</code>. An <code>overview.md</code> already in the room is left as it is.`}
             </p>
             ${data.files.problems.length ? html`<div class="flash flash-error">${data.files.problems.join(' ')}</div>` : ''}
             ${data.files.files.map((f) => html`<details><summary><code>${f.path}</code></summary><pre>${f.content}</pre></details>`)}
@@ -576,7 +706,12 @@ export function catalogPage(ctx: PageContext, data: { catalog: CatalogItem[]; te
 /** The Sales card on the Settings screen. */
 export function salesSettingsCard(
   ctx: PageContext,
-  data: { settings: AllSettings; dealRoom: IntegrationStatus | undefined; ai: { configured: boolean | null; spentDay: number; spentMonth: number } },
+  data: {
+    settings: AllSettings;
+    dealRoom: IntegrationStatus | undefined;
+    dealRoomApi: IntegrationStatus | undefined;
+    ai: { configured: boolean | null; spentDay: number; spentMonth: number };
+  },
 ): SafeHtml {
   const owner = hasRole(ctx.session.user, 'owner');
   const disabled = owner ? '' : 'disabled';
@@ -617,6 +752,40 @@ export function salesSettingsCard(
         <input name="sales.currency" value="${s['sales.currency']}" maxlength="3" class="mono" ${disabled} /></label>
 
       <h3>Penguin deal room</h3>
+      <label>${settingDefs['sales.dealroom_route'].label}
+        <select name="sales.dealroom_route" ${disabled}>
+          <option value="pull_request" ${s['sales.dealroom_route'] === 'pull_request' ? 'selected' : ''}>Content pull request: a person merges it in GitHub</option>
+          <option value="api" ${s['sales.dealroom_route'] === 'api' ? 'selected' : ''}>Service API: written to a draft room after approval</option>
+        </select></label>
+
+      <h4>Service API</h4>
+      <label>${settingDefs['sales.dealroom_url'].label}
+        <input name="sales.dealroom_url" type="url" value="${s['sales.dealroom_url']}" placeholder="https://" maxlength="200" class="mono" ${disabled} /></label>
+      <label class="check"><input type="checkbox" name="sales.dealroom_publish" value="1" ${s['sales.dealroom_publish'] ? 'checked' : ''} ${disabled} /> ${settingDefs['sales.dealroom_publish'].label}</label>
+      <p id="dealroom-token">
+        ${data.dealRoomApi === undefined
+          ? html`<span class="muted">The worker has not reported yet.</span>`
+          : data.dealRoomApi.configured
+            ? html`<span class="badge badge-done">Bot token set on the worker</span>
+                <span class="muted small">Last answer from the deal room ${data.dealRoomApi.lastOkAt ? when(data.dealRoomApi.lastOkAt) : 'never'}${
+                  data.dealRoomApi.lastError && data.dealRoomApi.lastErrorAt && (!data.dealRoomApi.lastOkAt || data.dealRoomApi.lastErrorAt > data.dealRoomApi.lastOkAt)
+                    ? ` · last error ${when(data.dealRoomApi.lastErrorAt)}: ${data.dealRoomApi.lastError}`
+                    : ''
+                }</span>`
+            : html`<span class="badge badge-failed">No bot token</span> <span class="muted small">Missing on the worker: ${data.dealRoomApi.missing.join(', ')}</span>`}
+      </p>
+      <p class="muted small">
+        The token is a variable of the worker service (<code>DEALROOM_API_TOKEN</code>, the same value as the deal room's <code>OPS_BOT_TOKEN</code>).
+        It is never stored here, never shown, and this web service does not have it. It is sent only to the address above, so change the
+        address only to the deal room itself.
+      </p>
+      <p class="muted small">
+        Nothing is sent to the deal room before a proposal is approved. On approval Patcher finds or creates the room and writes the files only if
+        the room is a draft that holds no person's edits; otherwise the files wait for their own approval. Changing these settings closes what
+        was waiting and offers it again.
+      </p>
+
+      <h4>Content pull request</h4>
       <label>${settingDefs['sales.dealroom_repo'].label}
         <input name="sales.dealroom_repo" value="${s['sales.dealroom_repo']}" class="mono" ${disabled} /></label>
       <p>

@@ -5,10 +5,12 @@ import type { Call } from '../calls/types.js';
 import { prepareFiles } from '../dealroom/files.js';
 import { listIntegrations } from '../integrations/status.js';
 import type { SalesResult } from '../sales/actions.js';
-import { MAX_PROPOSAL_CHARS, editProposal, notADeal, regenerate, setDealRoomSlug, setPenguin, setSalesCall, skipDealRoom } from '../sales/actions.js';
+import { MAX_PROPOSAL_CHARS, editProposal, notADeal, refreshDealRoomOffers, regenerate, reofferDealRoom, setDealRoomSlug, setPenguin, setSalesCall, skipDealRoom } from '../sales/actions.js';
+import { currentFollowUp, roomSettings } from '../sales/delivery.js';
 import { parseEmails } from '../sales/penguin.js';
 import {
   CatalogInputError,
+  followUpFor,
   getDeal,
   getProposal,
   getSalesCall,
@@ -45,6 +47,7 @@ export async function salesSettings(deps: WebDeps, ctx: PageContext, settings: A
   return salesSettingsCard(ctx, {
     settings,
     dealRoom: integrations.find((i) => i.name === 'dealroom'),
+    dealRoomApi: integrations.find((i) => i.name === 'dealroom_api'),
     ai: { configured: integrations.find((i) => i.name === 'anthropic')?.configured ?? null, spentDay, spentMonth },
   });
 }
@@ -81,7 +84,7 @@ export function salesRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       res.status(404).send(errorPage(404, 'That deal does not exist.'));
       return;
     }
-    const [ctx, proposals, updates, calls, users, repo, integrations] = await Promise.all([
+    const [ctx, proposals, updates, calls, users, repo, integrations, room] = await Promise.all([
       ui.context(req, res),
       listProposals(deps.pool, deal.id),
       listUpdates(deps.pool, deal.id),
@@ -89,8 +92,20 @@ export function salesRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       ui.userMap(),
       getSetting(deps.pool, 'sales.dealroom_repo'),
       listIntegrations(deps.pool),
+      roomSettings(deps.pool),
     ]);
-    res.send(dealPage(ctx, { deal, proposals, updates, calls, users, repo, dealRoom: integrations.find((i) => i.name === 'dealroom') }));
+    res.send(
+      dealPage(ctx, {
+        deal,
+        proposals,
+        updates,
+        calls,
+        users,
+        repo,
+        room,
+        dealRoom: integrations.find((i) => i.name === (room.route === 'api' ? 'dealroom_api' : 'dealroom')),
+      }),
+    );
   });
 
   router.post('/sales/deals/:id/penguin', ui.approver, async (req, res) => {
@@ -123,7 +138,7 @@ export function salesRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       res.status(404).send(errorPage(404, 'That proposal does not exist.'));
       return;
     }
-    const [ctx, call, sales, offer, updates, versions, users, currency] = await Promise.all([
+    const [ctx, call, sales, offer, updates, versions, users, currency, room] = await Promise.all([
       ui.context(req, res),
       proposal.callId ? getCall(deps.pool, proposal.callId) : Promise.resolve(null),
       proposal.callId ? getSalesCall(deps.pool, proposal.callId) : Promise.resolve(null),
@@ -132,16 +147,23 @@ export function salesRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       listProposals(deps.pool, deal.id),
       ui.userMap(),
       getSetting(deps.pool, 'sales.currency'),
+      roomSettings(deps.pool),
     ]);
-    const toRoom = deal.isPenguin === true && !deal.dealRoomSkipped && deal.dealRoomSlug && proposal.status === 'draft';
-    let offerDescription: string | null = null;
-    if (offer) {
+    const viaApi = room.route === 'api';
+    const toRoom = deal.isPenguin === true && !deal.dealRoomSkipped && proposal.status === 'draft' && (viaApi || Boolean(deal.dealRoomSlug));
+    const describe = (rec: { action: Parameters<typeof deps.catalog.describe>[0] } | null): string | null => {
+      if (!rec) return null;
       try {
-        offerDescription = deps.catalog.describe(offer.action);
+        return deps.catalog.describe(rec.action);
       } catch {
-        offerDescription = null;
+        return null;
       }
-    }
+    };
+    const offerDescription = describe(offer);
+    const own = updates.filter((u) => u.proposalId === proposal.id);
+    const update = own[0] ?? null;
+    // The approval that follows the deal room update, when it is the one the room calls for now.
+    const followUp = update ? currentFollowUp({ deal, proposal, update, room, followUp: await followUpFor(deps.pool, update.id) }) : null;
     res.send(
       proposalPage(ctx, {
         proposal,
@@ -150,9 +172,12 @@ export function salesRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
         sales,
         offer,
         offerDescription,
-        updates: updates.filter((u) => u.proposalId === proposal.id),
+        updates: own,
         versions,
-        files: toRoom ? prepareFiles({ slug: deal.dealRoomSlug!, title: proposal.title, contentMd: proposal.contentMd }) : null,
+        files: toRoom ? prepareFiles({ ...(viaApi ? {} : { slug: deal.dealRoomSlug! }), title: proposal.title, contentMd: proposal.contentMd }) : null,
+        room,
+        followUp,
+        followUpDescription: describe(followUp),
         users,
         currency,
       }),
@@ -218,6 +243,11 @@ export function salesRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
     await answer(res, await afterCall(id), await notADeal(deps, { callId: id, actor: ui.actorOf(res), via: 'ui' }));
   });
 
+  router.post('/sales/calls/:id/reoffer', ui.approver, async (req, res) => {
+    const id = String(req.params.id);
+    await answer(res, await afterCall(id), await reofferDealRoom(deps, { callId: id, actor: ui.actorOf(res), via: 'ui' }));
+  });
+
   router.post('/sales/calls/:id/post', ui.approver, async (req, res) => {
     const sales = await getSalesCall(deps.pool, String(req.params.id));
     if (!sales) {
@@ -280,7 +310,14 @@ export function salesRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       const changes: [SettingKey, unknown][] = [
         ['sales.enabled', body['sales.enabled'] === '1'],
         ['ai.sales.enabled', body['ai.sales.enabled'] === '1'],
+        // An unticked box sends nothing, so the publish setting is off unless the form says on.
+        ['sales.dealroom_publish', body['sales.dealroom_publish'] === '1'],
       ];
+      const before = await roomSettings(deps.pool);
+      const route = text(body['sales.dealroom_route']) || before.route;
+      const address = typeof body['sales.dealroom_url'] === 'string' ? text(body['sales.dealroom_url']) : before.origin;
+      if (route === 'api' && !address) throw new SettingValidationError('The service API needs the address of the deal room.');
+      changes.push(['sales.dealroom_route', route], ['sales.dealroom_url', address]);
       for (const key of ['sales.penguin_emails', 'sales.title_patterns'] as const) {
         if (typeof body[key] === 'string') changes.push([key, text(body[key])]);
       }
@@ -298,6 +335,11 @@ export function salesRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
         if (!parsed.success) throw new SettingValidationError(`${settingDefs[key].label}: ${parsed.error.issues[0]?.message ?? 'invalid value'}`);
       }
       for (const [key, value] of changes) await setSetting(deps.pool, key, value, actor);
+      const after = await roomSettings(deps.pool);
+      if (after.route !== before.route || after.origin !== before.origin || after.publish !== before.publish) {
+        // What was waiting was offered under the old setting. It is closed and offered again under the new one.
+        await refreshDealRoomOffers(deps, actor, 'Closed: the deal room settings changed.');
+      }
       await ui.back(res, '/settings#sales', 'ok', 'Saved.');
     } catch (err) {
       if (!(err instanceof SettingValidationError)) throw err;
