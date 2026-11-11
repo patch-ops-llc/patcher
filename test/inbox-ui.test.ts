@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { receiveCaptured } from '../src/inbox/capture.js';
@@ -117,6 +118,16 @@ describe('connecting PatchOps for reading', () => {
     expect(url.searchParams.get('team')).toBe(HUB);
     expect(url.toString()).not.toContain('made-up');
     expect(missingHistoryScopes(['channels:history', 'im:history'])).toEqual(['groups:history', 'mpim:history']);
+  });
+
+  it('asks for what the manifest declares, and the manifest gives a user nothing that writes', () => {
+    const manifest = readFileSync(new URL('../slack/manifest.yaml', import.meta.url), 'utf8');
+    const user = manifest.slice(manifest.indexOf('    user:'), manifest.indexOf('    bot:'));
+    const declared = [...user.matchAll(/^ {6}- (\S+)$/gm)].map((m) => m[1]!);
+    expect(declared.filter((s) => !['openid', 'profile', 'email'].includes(s)).sort()).toEqual([...READER_SCOPES].sort());
+    expect(declared.some((s) => /write|admin|remove|manage/.test(s))).toBe(false);
+    for (const event of ['message.channels', 'message.groups', 'message.mpim', 'message.im', 'tokens_revoked']) expect(manifest).toContain(`      - ${event}\n`);
+    expect(manifest).toContain('/auth/slack/reader/callback');
   });
 
   it('stores the token sealed, checks it, and reads from then on', async () => {

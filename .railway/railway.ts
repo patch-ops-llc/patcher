@@ -57,6 +57,8 @@ export default defineRailway(() => {
       SLACK_CLIENT_SECRET: preserve(),
       SLACK_SIGNING_SECRET: preserve(),
       BOOTSTRAP_OWNER_SLACK_USER_ID: preserve(),
+      // The password the inbound-mail service sends with forwarded Slack notification mail.
+      INBOUND_EMAIL_WEBHOOK_SECRET: preserve(),
     },
   });
 

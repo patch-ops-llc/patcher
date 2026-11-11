@@ -1,9 +1,13 @@
 # Slack app manifest for the Patcher hub app. Create it in the PatchOps workspace only:
 # https://api.slack.com/apps -> Create New App -> From a manifest.
 #
-# The four URLs below point at the web service's Railway domain. If that address changes
-# (a custom domain, for example), change all four here and in the Slack app.
+# The five URLs below point at the web service's Railway domain. If that address changes
+# (a custom domain, for example), change all five here and in the Slack app.
 # docs/setup-checklist.md has the full steps.
+#
+# Changed for the Slack reader (phase 4a): the second redirect URL, the ten read-only user
+# scopes, the four `message.*` user events and `tokens_revoked`. An app created from an
+# earlier copy of this file has to be updated: section 8 of the checklist says how.
 _metadata:
   major_version: 2
   minor_version: 1
@@ -27,13 +31,32 @@ features:
       should_escape: false
 oauth_config:
   redirect_urls:
-    - https://web-production-944a4680.up.railway.app/auth/slack/callback
-  scopes:
     # Sign in with Slack for the control UI.
+    - https://web-production-944a4680.up.railway.app/auth/slack/callback
+    # The owner's authorisation to read PatchOps (Slack inbox -> Connect PatchOps).
+    - https://web-production-944a4680.up.railway.app/auth/slack/reader/callback
+  scopes:
     user:
+      # Sign in with Slack for the control UI.
       - openid
       - profile
       - email
+      # The Slack reader. Granted by one person, the owner, from the control UI, and only
+      # in PatchOps. Every scope here reads; none can post, edit, delete or join. They
+      # reach what that person can see: public channels, private channels, group direct
+      # messages and direct messages he is in.
+      - channels:history
+      - groups:history
+      - mpim:history
+      - im:history
+      # Which conversations he is in, and their names, for the catch-up after a gap.
+      - channels:read
+      - groups:read
+      - mpim:read
+      - im:read
+      # Display names in place of member IDs, and the workspace's address for links.
+      - users:read
+      - team:read
     # The least the foundation needs. Later phases add their own scopes with their features.
     bot:
       # Post and edit recommendations in channels the bot has been invited to.
@@ -48,6 +71,15 @@ settings:
     request_url: https://web-production-944a4680.up.railway.app/slack/events
     bot_events:
       - app_home_opened
+      # Tells Patcher when the owner's authorisation to read was removed, so it can say so.
+      - tokens_revoked
+    # Delivered for each person who granted the user scopes above. Patcher accepts them
+    # only for the one connected reader and drops the rest unread.
+    user_events:
+      - message.channels
+      - message.groups
+      - message.mpim
+      - message.im
   interactivity:
     is_enabled: true
     request_url: https://web-production-944a4680.up.railway.app/slack/interactions
