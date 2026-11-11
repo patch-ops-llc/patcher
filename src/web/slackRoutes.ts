@@ -1,5 +1,6 @@
 import express from 'express';
 import type { Request, Response, Router } from 'express';
+import { handleCallAction, handleCallModal } from '../calls/slack.js';
 import { withTx } from '../db/pool.js';
 import { queueStats } from '../queue/queue.js';
 import { decide, editRecommendation, getRecommendation, listRecommendations, retryRecommendation } from '../recommendations/service.js';
@@ -121,6 +122,21 @@ export function slackRouter(deps: WebDeps): Router {
       // A message that carries several recommendations suffixes its buttons (`rec_approve:2`),
       // because Slack wants each action id in a message to be different.
       const actionId = asString(action?.action_id)?.split(':')[0];
+      // A call's message has its own buttons; each decision they make still goes through the loop.
+      if (
+        actionId &&
+        (await handleCallAction(deps, {
+          actor,
+          actionId,
+          value: action?.value,
+          triggerId: asString(payload.trigger_id),
+          tell: (text) => tellPrivately(responseUrl, text),
+        }))
+      ) {
+        await touchProfile(deps.pool, actor, { displayName: asString(user?.name) ?? null });
+        res.status(200).end();
+        return;
+      }
       const ref = decodeRef(action?.value);
       if (!actionId || !ref || !Object.values(ACTION_IDS).includes(actionId as never)) {
         res.status(200).end();
@@ -166,6 +182,12 @@ export function slackRouter(deps: WebDeps): Router {
 
     if (payload.type === 'view_submission') {
       const view = asObject(payload.view);
+      const callModal = view ? await handleCallModal(deps, actor, view) : { handled: false as const };
+      if (callModal.handled) {
+        if (callModal.errors) res.json({ response_action: 'errors', errors: callModal.errors });
+        else res.status(200).end();
+        return;
+      }
       if (view?.callback_id !== EDIT_MODAL_CALLBACK) {
         res.status(200).end();
         return;

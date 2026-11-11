@@ -1,4 +1,5 @@
 import type { WorkerDeps } from '../worker/deps.js';
+import type { Recommendation } from './types.js';
 
 /**
  * A carrier is a Slack message that shows several recommendations at once, one line and one
@@ -12,6 +13,11 @@ export interface Carrier {
   requestPost(deps: WorkerDeps, carrierId: string): Promise<void>;
   /** Edit the shared message to match the current state of what it carries. */
   render(deps: WorkerDeps, carrierId: string): Promise<void>;
+  /**
+   * What a thread reply about one carried recommendation starts with, so a reader can tell
+   * which line of the shared message it is about: its number there.
+   */
+  label?(deps: WorkerDeps, recommendation: Recommendation): Promise<string | null>;
 }
 
 export class Carriers {

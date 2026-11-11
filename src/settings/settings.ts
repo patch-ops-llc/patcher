@@ -10,6 +10,19 @@ const modelId = z
   .trim()
   .regex(/^[a-z0-9][a-z0-9.-]{2,80}$/, 'A model id looks like claude-sonnet-5-5.');
 
+/** Which copy of a call recorded twice is analysed. `speakers`: the one with speaker labels, then the longer. */
+export const PREFERRED_COPIES = ['speakers', 'longest', 'calendly', 'fathom'] as const;
+export type PreferredCopy = (typeof PREFERRED_COPIES)[number];
+
+const DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+const domainList = z
+  .string()
+  .max(1000)
+  .transform((value) =>
+    [...new Set(value.toLowerCase().split(/[\s,]+/).map((d) => d.replace(/^@/, '')).filter(Boolean))].join(', '),
+  )
+  .refine((value) => value.split(', ').filter(Boolean).every((d) => DOMAIN.test(d)), 'Write domains like example.com, separated by commas.');
+
 /**
  * Every setting the worker reads at run time. A later phase adds a key here with its schema
  * and default; nothing else needs to change for it to be stored, validated and audited.
@@ -64,6 +77,69 @@ export const settingDefs = {
     schema: z.number().int().min(5).max(24 * 60),
     default: 120,
     label: "Minutes to wait for the model's per-service assessments before the report goes out without them",
+  },
+  'calls.enabled': {
+    schema: z.boolean(),
+    default: true,
+    label: 'Collect and analyse call transcripts (off: nothing is fetched, and webhooks are acknowledged and dropped)',
+  },
+  'calls.settle_minutes': {
+    schema: z.number().int().min(0).max(240),
+    default: 10,
+    label: 'Minutes to wait after a transcript arrives, so a second recording of the same call can be grouped with it',
+  },
+  'calls.preferred_copy': {
+    schema: z.enum(PREFERRED_COPIES),
+    default: 'speakers',
+    label: 'Which transcript to analyse when a call was recorded twice',
+  },
+  'calls.retention_days': {
+    schema: z.number().int().min(1).max(3650),
+    default: 180,
+    label: 'Days to keep transcript text',
+  },
+  'calls.internal_domains': {
+    schema: domainList,
+    default: '',
+    label: 'Your own email domains, comma separated (attendees from these never count as a client)',
+  },
+  'ai.calls.enabled': {
+    schema: z.boolean(),
+    default: true,
+    label: 'Use the model for calls (off: calls are still collected, and wait unanalysed until this is on again)',
+  },
+  'ai.calls.model_match': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that matches a call to a project' },
+  'ai.calls.model_suggest': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that suggests changes from a call' },
+  'ai.calls.model_brief': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that drafts the brief for a code change' },
+  'ai.calls.auto_match_confidence': {
+    schema: z.number().min(0.5).max(1),
+    default: 0.8,
+    label: 'Confidence from which a call is matched to a project without asking',
+  },
+  'ai.calls.ask_confidence': {
+    schema: z.number().min(0).max(1),
+    default: 0.5,
+    label: 'Confidence from which Patcher asks in Slack which project a call belongs to (below: the Unmatched list)',
+  },
+  'ai.calls.max_suggestions': {
+    schema: z.number().int().min(1).max(5),
+    default: 5,
+    label: 'Most suggestions from one call',
+  },
+  'ai.calls.daily_budget_usd': {
+    schema: z.number().min(0).max(10_000),
+    default: 0,
+    label: 'Most to spend on call model calls in 24 hours, in US dollars (0: no cap)',
+  },
+  'ai.calls.monthly_budget_usd': {
+    schema: z.number().min(0).max(100_000),
+    default: 0,
+    label: 'Most to spend on call model calls in 30 days, in US dollars (0: no cap)',
+  },
+  'ai.calls.transcript_token_cap': {
+    schema: z.number().int().min(2000).max(150_000),
+    default: 40_000,
+    label: 'Most transcript tokens sent to the model for one call (a longer call is cut in the middle)',
   },
 } as const;
 

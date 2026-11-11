@@ -25,4 +25,9 @@ export interface WebDeps {
   /** Null when there is no bot token; the Edit button then points to the UI. */
   modals: Pick<SlackClient, 'openView'> | null;
   features: Record<string, FeatureStatus>;
+  /**
+   * Seals a key typed into the UI so that only the worker can open it. Null until
+   * `TOKEN_PUBLIC_KEY` is set; a key cannot be added without it.
+   */
+  seal: ((plaintext: string) => string) | null;
 }

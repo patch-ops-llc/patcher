@@ -4,9 +4,9 @@ import { SignJWT } from 'jose';
 
 /**
  * Read-only GitHub App client, built from GitHub's REST reference: an app JWT is exchanged
- * for an installation token, which reads the three things the audit needs. The app needs
- * the repository permissions Metadata: read, Contents: read and Dependabot alerts: read,
- * and no write permission.
+ * for an installation token, which reads the three things the audit needs and the two the
+ * call suggestions use for context. The app needs the repository permissions Metadata: read,
+ * Contents: read, Dependabot alerts: read and Pull requests: read, and no write permission.
  */
 export const GITHUB_API_URL = 'https://api.github.com';
 
@@ -24,6 +24,10 @@ export interface GitHubClient {
   /** Commits on `head` that `base` does not have. */
   commitsAhead(repo: string, base: string, head: string): Promise<number>;
   openCriticalAlerts(repo: string): Promise<number>;
+  /** The start of the repository's README as text. Null when it has none. */
+  readme(repo: string): Promise<string | null>;
+  /** Titles of open pull requests, newest first. Needs the app permission Pull requests: read. */
+  openPullTitles(repo: string): Promise<string[]>;
 }
 
 export interface GitHubClientOptions {
@@ -38,6 +42,7 @@ export interface GitHubClientOptions {
 }
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const MAX_README_CHARS = 20_000;
 
 /** Throws if the key is not a usable private key, so a bad value is caught at boot. */
 export function parseGitHubPrivateKey(pem: string): KeyObject {
@@ -128,6 +133,27 @@ export function createGitHubClient(options: GitHubClientOptions): GitHubClient {
       const body = await get(`${repoPath(repo)}/dependabot/alerts?state=open&severity=critical&per_page=100`);
       if (!Array.isArray(body)) throw new GitHubApiError('GitHub: the alert list was not a list', 200);
       return body.length;
+    },
+
+    async readme(repo) {
+      let body: { content?: unknown; encoding?: unknown };
+      try {
+        body = (await get(`${repoPath(repo)}/readme`)) as typeof body;
+      } catch (err) {
+        if (err instanceof GitHubApiError && err.status === 404) return null;
+        throw err;
+      }
+      if (typeof body.content !== 'string' || body.encoding !== 'base64') return null;
+      return Buffer.from(body.content, 'base64').toString('utf8').slice(0, MAX_README_CHARS);
+    },
+
+    async openPullTitles(repo) {
+      const body = await get(`${repoPath(repo)}/pulls?state=open&sort=created&direction=desc&per_page=20`);
+      if (!Array.isArray(body)) throw new GitHubApiError('GitHub: the pull request list was not a list', 200);
+      return body.flatMap((pull: unknown) => {
+        const title = (pull as { title?: unknown } | null)?.title;
+        return typeof title === 'string' && title.trim() ? [title.trim().slice(0, 200)] : [];
+      });
     },
   };
 }

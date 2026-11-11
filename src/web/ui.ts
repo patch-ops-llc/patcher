@@ -25,8 +25,10 @@ import { SettingValidationError, getAllSettings, setSetting } from '../settings/
 import type { Role, User } from '../settings/users.js';
 import { ROLES, UserChangeError, canDecide, hasRole, listUsers, removeUser, saveUser } from '../settings/users.js';
 import { OidcError } from '../slack/oidc.js';
+import { resumeHeldCallPosts } from '../calls/delivery.js';
 import { resumeHeldReports } from '../weekly/delivery.js';
 import { auditRoutes } from './auditUi.js';
+import { MAX_UPLOAD, callRoutes, callsSettings } from './callsUi.js';
 import { authorizeLogin } from './auth.js';
 import type { WebDeps } from './deps.js';
 import type { Session } from './session.js';
@@ -67,6 +69,8 @@ export function uiRouter(deps: WebDeps): Router {
   const redirectUri = `${deps.appBaseUrl}/auth/slack/callback`;
   const slackReady = () => Boolean(deps.features.slackRequests?.configured && deps.features.slackModals?.configured);
 
+  // A pasted transcript is the one form that is long. Its parser runs first; the general one then finds the body read.
+  router.post('/calls/upload', express.urlencoded({ extended: false, limit: MAX_UPLOAD }));
   router.use(express.urlencoded({ extended: false, limit: '100kb' }));
 
   // Sign-in --------------------------------------------------------------------------------
@@ -318,6 +322,7 @@ export function uiRouter(deps: WebDeps): Router {
         users,
         settings,
         kinds: deps.catalog.kindNames(),
+        callsCard: await callsSettings(deps, ctx, settings),
         dryRunEnv: deps.dryRunEnv,
         slackReady: slackReady(),
         ai: {
@@ -353,6 +358,7 @@ export function uiRouter(deps: WebDeps): Router {
         );
         for (const row of waiting.rows) await deps.queue.enqueue('recommendation.post', { recommendationId: row.id });
         if (type === 'audit') await resumeHeldReports(deps);
+        if (type === 'calls') await resumeHeldCallPosts(deps);
       }
       await back(res, '/settings#routing', 'ok', changed ? `${REPORT_TYPES[type].label} channel saved.` : 'Nothing changed.');
     } catch (err) {
@@ -505,7 +511,9 @@ export function uiRouter(deps: WebDeps): Router {
     res.send(activityPage(ctx, { audit, runs: runs.rows, users, nextBefore }));
   });
 
-  auditRoutes(router, deps, { context, back, actorOf, userMap, owner, approver });
+  const helpers = { context, back, actorOf, userMap, owner, approver };
+  auditRoutes(router, deps, helpers);
+  callRoutes(router, deps, helpers);
 
   return router;
 }

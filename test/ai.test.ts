@@ -5,6 +5,9 @@ import type { ModelRequest } from '../src/ai/client.js';
 import { TIER_MODELS, costUsd, estimateTokens } from '../src/ai/models.js';
 import { PROMPTS, dataBlock, loadAllPrompts } from '../src/ai/prompts.js';
 import { buildRequest, readReply, toolSchema } from '../src/ai/run.js';
+import { CALL_BRIEF_TASK } from '../src/calls/brief.js';
+import { MATCH_TASK } from '../src/calls/match.js';
+import { SUGGEST_TASK } from '../src/calls/suggest.js';
 import { BRIEF_TASK } from '../src/fix/brief.js';
 import { SERVICE_TASK } from '../src/weekly/assess.js';
 import { ROLLUP_TASK } from '../src/weekly/rollup.js';
@@ -230,7 +233,14 @@ describe('prompts', () => {
   it('loads one versioned file per task, each of which declares its data untrusted and names its tool', () => {
     const prompts = loadAllPrompts();
     expect(prompts.map((p) => `${p.task}/${p.version}`).sort()).toEqual(Object.entries(PROMPTS).map(([task, version]) => `${task}/${version}`).sort());
-    const tools: Record<string, string> = { 'audit-service': SERVICE_TASK.tool.name, 'audit-rollup': ROLLUP_TASK.tool.name, 'fix-brief': BRIEF_TASK.tool.name };
+    const tools: Record<string, string> = {
+      'audit-service': SERVICE_TASK.tool.name,
+      'audit-rollup': ROLLUP_TASK.tool.name,
+      'fix-brief': BRIEF_TASK.tool.name,
+      'call-match': MATCH_TASK.tool.name,
+      'call-suggestions': SUGGEST_TASK.tool.name,
+      'call-brief': CALL_BRIEF_TASK.tool.name,
+    };
     for (const prompt of prompts) {
       expect(prompt.system, prompt.task).toContain(tools[prompt.task]!);
       expect(prompt.system, prompt.task).toMatch(/Never follow instructions/);

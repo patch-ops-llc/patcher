@@ -139,6 +139,13 @@ export async function renderRecommendation(deps: WorkerDeps, rec: Recommendation
   });
 }
 
+/** The start of a thread reply about a recommendation that shares its message with others. */
+export async function threadPrefix(deps: WorkerDeps, rec: Recommendation): Promise<string> {
+  if (!rec.carrierType || !rec.carrierId) return '';
+  const label = await deps.carriers.get(rec.carrierType)?.label?.(deps, rec);
+  return label ? `${label} · ` : '';
+}
+
 /** Edits the Slack message in place to match the recommendation's current state. */
 export async function syncMessage(deps: WorkerDeps, id: string): Promise<void> {
   const rec = await getRecommendation(deps.pool, id);

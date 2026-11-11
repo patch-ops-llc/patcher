@@ -50,6 +50,21 @@ describe('settings', () => {
       'ai.audit.monthly_budget_usd': 0,
       'ai.audit.log_token_cap': 4000,
       'ai.audit.wait_minutes': 120,
+      'calls.enabled': true,
+      'calls.settle_minutes': 10,
+      'calls.preferred_copy': 'speakers',
+      'calls.retention_days': 180,
+      'calls.internal_domains': '',
+      'ai.calls.enabled': true,
+      'ai.calls.model_match': 'claude-sonnet-5-5',
+      'ai.calls.model_suggest': 'claude-sonnet-5-5',
+      'ai.calls.model_brief': 'claude-sonnet-5-5',
+      'ai.calls.auto_match_confidence': 0.8,
+      'ai.calls.ask_confidence': 0.5,
+      'ai.calls.max_suggestions': 5,
+      'ai.calls.daily_budget_usd': 0,
+      'ai.calls.monthly_budget_usd': 0,
+      'ai.calls.transcript_token_cap': 40000,
     });
   });
 

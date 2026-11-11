@@ -1,10 +1,11 @@
 import { ConfigError, loadWebConfig } from './config.js';
 import { createPool } from './db/pool.js';
+import { registerCallCatalog } from './calls/catalog.js';
 import { registerFixCatalog } from './fix/agentFix.js';
 import { createLogger } from './log.js';
 import { JobQueue } from './queue/queue.js';
 import { createCatalog } from './recommendations/catalog.js';
-import { loadPublicKey } from './security/sealed.js';
+import { loadPublicKey, seal } from './security/sealed.js';
 import { ensureBootstrapOwner } from './settings/users.js';
 import { createSlackClient } from './slack/client.js';
 import { createSlackOidc } from './slack/oidc.js';
@@ -13,7 +14,7 @@ import { createApp } from './web/app.js';
 async function main(): Promise<void> {
   const config = loadWebConfig();
   const log = createLogger(config.logLevel, { service: 'web' });
-  if (config.tokenPublicKey) loadPublicKey(config.tokenPublicKey);
+  const tokenPublicKey = config.tokenPublicKey ? loadPublicKey(config.tokenPublicKey) : null;
 
   // The service starts without the owner-supplied Slack variables; each affected part says
   // so in the log here, on /health, and on the page or endpoint that needs it.
@@ -32,7 +33,7 @@ async function main(): Promise<void> {
     pool,
     queue,
     // Registered without a runtime: the public service validates and describes the action, never runs it.
-    catalog: registerFixCatalog(createCatalog(), null),
+    catalog: registerCallCatalog(registerFixCatalog(createCatalog(), null), null),
     log,
     appBaseUrl: config.appBaseUrl,
     cookies: { secret: config.sessionSecret, secure: config.appBaseUrl.startsWith('https://') },
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
       ? createSlackClient({ token: config.slackBotToken, apiUrl: config.slackApiUrl, timeoutMs: 2500 })
       : null,
     features: config.features,
+    seal: tokenPublicKey ? (plaintext) => seal(tokenPublicKey, plaintext) : null,
   });
 
   const server = app.listen(config.port, () => log.info('web started', { port: config.port, baseUrl: config.appBaseUrl }));

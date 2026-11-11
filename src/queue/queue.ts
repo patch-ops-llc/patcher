@@ -55,6 +55,11 @@ const QUEUE_OVERRIDES: Partial<Record<JobName, { retryLimit?: number; expireInSe
   // One poll can end in the ranking call and up to three briefs, each of which may think for a while.
   'audit.analyze': { expireInSeconds: 1800 },
   'audit.fix.propose': { expireInSeconds: 900 },
+  // A first poll can fetch two weeks of transcripts at the vendor's rate limit.
+  'calls.poll': { expireInSeconds: 1800 },
+  'calls.analyze': { expireInSeconds: 900 },
+  // Up to five briefs after the suggestions themselves.
+  'calls.suggest': { expireInSeconds: 1800 },
 };
 
 function errorText(output: unknown): string {

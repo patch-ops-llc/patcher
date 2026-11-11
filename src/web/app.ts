@@ -1,6 +1,7 @@
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
+import { sourceHealth, storeDelivery } from '../calls/connections.js';
 import { publicDir } from '../paths.js';
 import { listIntegrations } from '../integrations/status.js';
 import { queueStats } from '../queue/queue.js';
@@ -41,10 +42,11 @@ export function createApp(deps: WebDeps): express.Express {
   app.get('/health', async (_req, res) => {
     const features = Object.fromEntries(Object.entries(deps.features).map(([name, f]) => [name, f.configured]));
     try {
-      const [queue, settings, integrations] = await Promise.all([
+      const [queue, settings, integrations, callSources] = await Promise.all([
         queueStats(deps.pool),
         getAllSettings(deps.pool),
         listIntegrations(deps.pool),
+        sourceHealth(deps.pool),
       ]);
       res.json({
         ok: true,
@@ -59,6 +61,8 @@ export function createApp(deps: WebDeps): express.Express {
         integrations: Object.fromEntries(
           integrations.map((i) => [i.name, { configured: i.configured, lastOkAt: i.lastOkAt?.toISOString() ?? null }]),
         ),
+        // Connected Calendly and Fathom keys, and the last time one answered.
+        callSources,
       });
     } catch (err) {
       deps.log.error('health check failed', { err });
@@ -67,6 +71,25 @@ export function createApp(deps: WebDeps): express.Express {
   });
 
   app.use('/assets', express.static(publicDir, { maxAge: '1h', index: false }));
+  /**
+   * Calendly and Fathom completion webhooks. The address carries a token only the vendor was
+   * given. The delivery is stored as it arrived and acknowledged; the worker, which alone
+   * holds the signing secret, verifies the signature before anything in it is used.
+   */
+  app.post('/webhooks/:source/:token', express.raw({ type: () => true, limit: '5mb' }), async (req, res) => {
+    const headers: Record<string, string | undefined> = {};
+    for (const [name, value] of Object.entries(req.headers)) headers[name.toLowerCase()] = Array.isArray(value) ? value[0] : value;
+    const outcome = await storeDelivery(deps, {
+      source: String(req.params.source),
+      token: String(req.params.token),
+      headers,
+      rawBody: Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '',
+    });
+    if (outcome === 'unknown') res.status(404).json({ error: 'not_found' });
+    else if (outcome === 'unsigned') res.status(400).json({ error: 'unsigned' });
+    else res.status(200).json({ ok: true });
+  });
+
   app.use('/slack', slackRouter(deps));
   app.use(uiRouter(deps));
 
@@ -77,7 +100,12 @@ export function createApp(deps: WebDeps): express.Express {
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     deps.log.error('request failed', { err, method: req.method, path: req.path });
     if (res.headersSent) return;
-    if (req.path.startsWith('/slack/')) res.status(500).json({ error: 'internal_error' });
+    if ((err as { type?: unknown } | null)?.type === 'entity.too.large') {
+      if (req.path.startsWith('/webhooks/')) res.status(413).json({ error: 'too_large' });
+      else res.status(413).send(errorPage(413, 'That is too long to send in one form.'));
+      return;
+    }
+    if (req.path.startsWith('/slack/') || req.path.startsWith('/webhooks/')) res.status(500).json({ error: 'internal_error' });
     else res.status(500).send(errorPage(500, 'Something went wrong. It has been logged.'));
   });
 
