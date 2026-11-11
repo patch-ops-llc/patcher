@@ -1,5 +1,6 @@
 import type { Request, RequestHandler, Response, Router } from 'express';
 import { callTotals } from '../ai/run.js';
+import { listProjectTasks } from '../calls/store.js';
 import { fixAvailability, listAgentRuns } from '../fix/agentFix.js';
 import { isConfigured, listIntegrations } from '../integrations/status.js';
 import { lastInventorySync, listRailwayProjects } from '../railway/inventory.js';
@@ -25,6 +26,7 @@ import type { FindingState } from '../weekly/findings.js';
 import { FINDING_STATES, FindingStateError, getFinding, listFindings, setFindingState } from '../weekly/findings.js';
 import { requestAudit } from '../weekly/request.js';
 import { auditRunPage, auditsPage, findingPage, projectPage, projectsPage } from './auditViews.js';
+import { projectTasksCard } from './callsViews.js';
 import type { WebDeps } from './deps.js';
 import type { PageContext } from './views.js';
 import { errorPage } from './views.js';
@@ -205,8 +207,19 @@ export function auditRoutes(router: Router, deps: WebDeps, ui: UiHelpers): void 
       res.status(404).send(errorPage(404, 'That project does not exist.'));
       return;
     }
-    const railway = await listRailwayProjects(deps.pool);
-    res.send(projectPage(await ui.context(req, res), { project, railwayNames: new Map(railway.map((p) => [p.id, p.name])) }));
+    const [ctx, railway, tasks, users] = await Promise.all([
+      ui.context(req, res),
+      listRailwayProjects(deps.pool),
+      listProjectTasks(deps.pool, project.id),
+      ui.userMap(),
+    ]);
+    res.send(
+      projectPage(ctx, {
+        project,
+        railwayNames: new Map(railway.map((p) => [p.id, p.name])),
+        tasksCard: projectTasksCard(ctx, project, tasks, users),
+      }),
+    );
   });
 
   router.post('/projects/:id', ui.owner, async (req, res) => {

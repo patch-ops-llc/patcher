@@ -4,7 +4,7 @@ The PatchOps operations bot. It watches PatchOps' work, posts short recommendati
 PatchOps Slack workspace, and acts only after a person on the approver list approves the
 exact action shown.
 
-This repository holds two phases:
+This repository holds three phases:
 
 - **Phase 0, the foundation**: the two services, the database, the job queue and scheduler,
   the Slack hub app, the control UI, settings, the audit log, the pause switch, and the
@@ -14,6 +14,10 @@ This repository holds two phases:
   them, ranks them and words one short report in Slack, a registry that links Railway
   projects to repositories, and "Fix via agent", which starts a Cursor agent on a linked
   repository, with a brief the model drafted, after a person approves.
+- **Phase 2, call transcripts**: transcripts from Calendly Notetaker and Fathom by webhook
+  and by a catch-up poll, a call recorded by both analysed once, each call matched to a
+  project in the registry, and the changes it asked for posted as one short Slack message.
+  An approved code change starts a Cursor agent that opens a pull request.
 
 - Setting it up: [`docs/setup-checklist.md`](docs/setup-checklist.md)
 - Slack app: [`slack/manifest.yaml`](slack/manifest.yaml)
@@ -122,6 +126,98 @@ report, and its second line says "ranked by rules (AI not configured)".
 - **The registry** (`/projects`) is the list of repositories an agent may be started on. An
   owner fills it, by hand or by importing from the Railway inventory.
 
+## Call transcripts
+
+```
+Fathom / Calendly ──webhook──▶ web   check the address, store the delivery, acknowledge
+                                 │
+transcripts.poll (every 15 min)  ▼
+        │              calls.webhook ─▶ verify the signature ─▶ fetch the transcript
+        └─▶ calls.poll ─────────────────────────┐                     │
+                                                ▼                     ▼
+                              ingest: normalise, drop duplicates, group two recordings of one call
+                                                │  (waits the settle time for a second recording)
+                                  calls.analyze ▼
+                    registry hints ─▶ model: which project, how sure, which words say so
+                         │                      │
+        below 0.50: Unmatched list     0.50 to 0.80: ask in Slack      0.80 and above: matched
+                                                                              │
+                                                                calls.suggest ▼
+                                            model: at most five suggestions, each with a quote
+                                                                              │
+                                                                   calls.post ▼
+                                             one Slack message ─▶ approval ─▶ agent ─▶ PR
+```
+
+- **Sources** (`src/calls/sources/`). One adapter per vendor behind `TranscriptSource`:
+  check a key, register and delete a webhook, verify a delivery, list what is new, fetch one
+  transcript. Calendly is one connection with a personal access token. Fathom keys are per
+  person, so there can be several: one key for the team, a key per teammate, or both. Each
+  connection has its own webhook address and its own poll watermark.
+- **Keys** are typed into **Settings → Calls**, encrypted by the public service with
+  `TOKEN_PUBLIC_KEY` before they are stored, and opened only by the worker with
+  `TOKEN_PRIVATE_KEY`. They are never shown again, logged or sent to a model. The same goes
+  for each webhook's signing secret.
+- **Webhooks** arrive at `/webhooks/<source>/<token>`. The token is random, per connection,
+  and stored only as a hash. The public service cannot check the signature, because it
+  cannot open the signing secret; it stores the delivery and answers, and the worker
+  verifies the signature before anything in the delivery is used. A delivery that fails is
+  dropped and its body erased. Fathom's retries carry the same delivery id and are stored
+  once.
+- **The poll** runs every 15 minutes from each connection's watermark, with a day's overlap,
+  so a missed webhook costs at most that long. A key the vendor refuses disconnects that
+  connection only, with one notice in the errors channel.
+- **One call, recorded twice** (`src/calls/ingest.ts`). Transcripts whose times overlap and
+  whose guests largely match are one call. The call is analysed once, on the copy chosen by
+  the "which transcript" setting (by default the one with speaker labels, then the longer
+  one); the other is kept and shown as a duplicate. Analysis waits the settle time (ten
+  minutes to start with) so the second recording can arrive first.
+- **Matching** (`src/calls/hints.ts`, `match.ts`). The registry gives hints: an attendee's
+  e-mail domain is a client domain, an attendee is a listed contact, a project's name or
+  alias is in the title or said in the call. The model gets the hints, a card per project
+  and the transcript, and returns projects with a confidence and the words that justify it.
+  A match is kept only if the project is on the list and either the quote is in the
+  transcript or the registry has a hint for it; without a quote found in the transcript the
+  match can never be automatic, whatever confidence the model states. A call can match more
+  than one project. Correcting a match in the UI offers to save the attendee's domain or a
+  name on the project, so the next call matches by itself.
+- **Suggestions** (`src/calls/suggest.ts`). For each matched project the model gets the
+  transcript, the project's card, the start of each linked repository's README, its open
+  pull request titles, and what was approved or dismissed before for that project only. It
+  returns at most five. One is kept only if its quote is in the transcript, it is not a
+  repeat, it carries no link that was not said on the call, and it names no other client
+  or project. A code change needs a repository linked to the project and a configured
+  Cursor key; otherwise it is offered as a task, and says why.
+- **What approval does** (`src/calls/catalog.ts`). A code change starts one Cursor agent on
+  the project's linked repository with the brief shown before approval; the agent opens a
+  pull request and nothing merges it. A task is recorded on the project. A follow-up is a
+  drafted message kept on the project for a person to send; Patcher sends nothing. A note
+  is shown for awareness and has nothing to approve.
+- **The message** (`src/calls/delivery.ts`) is one per call: a headline, the numbered
+  suggestions (four at most; a call with five shows three and "+2 more under Pick"), and
+  Approve all, Pick, Wrong project, Details. Pick opens a form to tick, edit and approve in one step. After the decisions
+  the message is one line, and each outcome is one numbered reply in its thread.
+- **What a model sees.** The transcript after redaction, attendee names with e-mail domains
+  (not addresses), the project cards, README starts, pull request titles and earlier
+  decisions' titles. It returns one tool call that only records its answer. When the model
+  is not available (Patcher paused, no key, switched off, over budget, provider down) the
+  call waits as "held" and is picked up again by itself; a reply that fails validation twice marks the
+  call failed, with "Analyse again" on its page. Calls have their own budgets in
+  **Settings → Calls**.
+- **Deleting and keeping.** When a recording is deleted at its source Patcher deletes its
+  copy, and if it was the call's only copy, also what was drawn from it and not yet
+  approved. Transcript text is removed after the retention time (180 days to start with);
+  the call's record stays.
+- **By hand.** **Calls → Add a transcript** takes pasted text for a call recorded some
+  other way.
+
+The next phase (sales calls, proposals, the deal room) attaches at `src/calls/seam.ts`:
+`onCallAnalysed` is called once per analysed call, the host and attendees are normalised
+from both sources, and `calls.call_type` is reserved and unwritten. Nothing in this phase
+classifies a call as a sales call.
+
+## The audit dry run
+
 A dry run reads the live workspace and writes the findings, ranked by the rules, to a file,
 without the database, Slack, a model or any fix. The output holds real project names, so the script refuses a path
 inside the repository:
@@ -145,6 +241,8 @@ src/
   ai/                               the shared model client: provider adapter, prompts, validation,
                                     call records and cost
   audit/                            the audit log
+  calls/                            call transcripts: sources, connections, ingestion, matching,
+                                    suggestions, the Slack message, and the seam for the sales phase
   cursor/                           Cursor Cloud Agents client
   db/                               pool, transactions, migration runner
   fix/                              "Fix via agent": the action, its brief, the agent poll
@@ -177,7 +275,9 @@ test/                               vitest, against a real Postgres
 | A Slack event | An entry in `slackEventHandlers`, and the event in the manifest |
 | A report type with its own channel | `REPORT_TYPES` in `src/settings/routes.ts` |
 | A setting | `settingDefs` in `src/settings/settings.ts` |
-| A webhook from another system | A router beside `src/web/slackRoutes.ts` that verifies, stores in `webhook_events` and enqueues |
+| A webhook from another system | As `/webhooks/:source/:token` in `src/web/app.ts` does: check, store in `webhook_events`, enqueue, acknowledge |
+| A transcript source | A `TranscriptSource` in `src/calls/sources/`, added to `integrations.transcripts` in `src/worker.ts` |
+| Something that reads every analysed call | `onCallAnalysed` in `src/calls/seam.ts` |
 | A message that carries several recommendations | A carrier in `src/recommendations/carriers.ts`, as the audit report does in `src/weekly/delivery.ts` |
 | An audit check | A `Check` in `src/weekly/checks.ts`, added to `CHECKS` |
 | Something else to read from Railway | A query in `src/railway/queries.ts` (read-only) and a collector in `src/railway/collect.ts` |
@@ -218,7 +318,10 @@ SLACK_OIDC_URL=http://localhost:4010
 
 Without `RAILWAY_API_TOKEN`, `CURSOR_API_KEY`, `ANTHROPIC_API_KEY` and the `GITHUB_APP_*`
 variables the worker starts, logs each as not configured, and the **Audits** screen says
-which variables are missing.
+which variables are missing. Connecting a call source also needs the token key pair
+(`TOKEN_PUBLIC_KEY` on web, `TOKEN_PRIVATE_KEY` on worker); the setup checklist has the
+command that makes one. A webhook is registered only when `APP_BASE_URL` is a public
+`https` address, so a local run collects by poll.
 
 Open <http://localhost:3000>, sign in (the fake signs you in as `U0OWNER`), go to
 **Settings**, refresh the channel list, choose a channel and click **Send test**. The fake
@@ -249,10 +352,13 @@ The test run rebuilds the test database from `migrations/` each time.
   level, one line after a decision, detail in a thread or behind a link.
 - Text that came from outside is escaped before it goes into a Slack message or a page.
 - The public service never holds a key that decrypts stored tokens, nor the Railway, Cursor,
-  GitHub or Anthropic credentials.
+  GitHub, Anthropic, Calendly or Fathom credentials.
 - A model drafts and classifies. It is given redacted text, returns data that is validated,
   and cannot start an action. Nothing is used from output that failed validation.
 - Railway is only read. Variable values are never requested.
-- Tests and fixtures use made-up projects. Nothing read from a real workspace is committed.
+- Tests and fixtures use made-up projects, people and calls. Nothing read from a real
+  workspace or a real call is committed.
+- Nothing is used from a webhook before its signature has been verified.
+- A suggestion from a call is kept only with words found in that call's transcript.
 - An agent is started only on a repository linked in the registry, only after approval, and
   nothing merges its pull request.

@@ -40,6 +40,7 @@ interface Shape {
   title: string;
   startedAt: Date | null;
   durationSeconds: number | null;
+  hostEmail?: string | null;
   attendees: Attendee[];
 }
 
@@ -66,7 +67,8 @@ function overlap(a: Set<string>, b: Set<string>): number | null {
   return shared / Math.min(a.size, b.size);
 }
 
-const emails = (shape: Shape): Set<string> => new Set(shape.attendees.flatMap((a) => (a.email ? [a.email.toLowerCase()] : [])));
+const emails = (shape: Shape, except: Set<string> = new Set()): Set<string> =>
+  new Set(shape.attendees.flatMap((a) => (a.email && !except.has(a.email.toLowerCase()) ? [a.email.toLowerCase()] : [])));
 const names = (shape: Shape): Set<string> => new Set(shape.attendees.flatMap((a) => (a.name ? [fold(a.name)] : [])));
 
 /**
@@ -75,6 +77,10 @@ const names = (shape: Shape): Set<string> => new Set(shape.attendees.flatMap((a)
  */
 export function sameCall(a: Shape, b: Shape): boolean {
   if (!timesOverlap(a, b)) return false;
+  // Back-to-back calls share their host and nothing else, so the guests decide where both sides list any.
+  const hosts = new Set([a.hostEmail, b.hostEmail].flatMap((h) => (h ? [h.toLowerCase()] : [])));
+  const byGuest = hosts.size ? overlap(emails(a, hosts), emails(b, hosts)) : null;
+  if (byGuest !== null) return byGuest >= 0.5;
   const byEmail = overlap(emails(a), emails(b));
   if (byEmail !== null) return byEmail >= 0.5;
   const byName = overlap(names(a), names(b));
@@ -198,7 +204,7 @@ export async function ingestTranscript(deps: IngestDeps, transcript: NormalizedT
         [t.startedAt],
       );
       const twin = near.rows.find((c) =>
-        sameCall(t, { title: c.title, startedAt: c.started_at, durationSeconds: c.duration_seconds, attendees: c.attendees }),
+        sameCall(t, { title: c.title, startedAt: c.started_at, durationSeconds: c.duration_seconds, hostEmail: c.host_email, attendees: c.attendees }),
       );
       if (twin) {
         const transcriptId = await insertTranscript(tx, t, twin.id, connectionId, hash, retentionDays);
@@ -256,9 +262,9 @@ export async function removeTranscript(deps: IngestDeps, source: TranscriptOrigi
       if (gone.is_preferred) await repickPreferred(tx, gone.call_id);
     } else {
       await closeCallRecommendations(tx, gone.call_id, { reason: REMOVED, actor: SYSTEM_ACTOR, blankEvidence: true });
-      await tx.query(`DELETE FROM call_suggestions WHERE call_id = $1 AND recommendation_id IS NULL`, [gone.call_id]);
+      // Only what a person approved stays, because it was acted on: the agent, task or draft exists.
       await tx.query(
-        `UPDATE call_suggestions s SET quote = '[removed]', detail = '', draft = NULL
+        `DELETE FROM call_suggestions s
           WHERE s.call_id = $1 AND NOT EXISTS (
             SELECT 1 FROM recommendations r WHERE r.id = s.recommendation_id AND r.status IN ('approved', 'executing', 'done', 'failed'))`,
         [gone.call_id],

@@ -27,6 +27,7 @@ const NAV = [
   { href: '/', label: 'Home' },
   { href: '/approvals', label: 'Approvals' },
   { href: '/audits', label: 'Audits' },
+  { href: '/calls', label: 'Calls' },
   { href: '/projects', label: 'Projects' },
   { href: '/settings', label: 'Settings' },
   { href: '/activity', label: 'Activity' },
@@ -411,6 +412,8 @@ export function settingsPage(
       spentMonth: number;
       calls: CallTotals[];
     },
+    /** The Calls card, built by the calls screens. */
+    callsCard: SafeHtml;
   },
 ): string {
   const owner = hasRole(ctx.session.user, 'owner');
@@ -542,6 +545,8 @@ export function settingsPage(
         ${data.ai.calls.length ? html`<h3>Model calls, last 30 days</h3>${callsTable(data.ai.calls)}` : ''}
       </section>
 
+      ${data.callsCard}
+
       <section class="card" id="schedules">
         <h2>Schedules</h2>
         <p class="muted">Cron expression and time zone. A change takes effect within a minute.</p>
@@ -616,7 +621,9 @@ function roleSelect(current: Role, disabled: string): SafeHtml {
 // Activity ------------------------------------------------------------------------------------
 
 /** Where an audit-log target lives, from the action that wrote it. */
-function targetPath(action: string): string {
+function targetPath(action: string): string | null {
+  if (action.startsWith('calls.connection.')) return null;
+  if (action.startsWith('call.')) return '/calls';
   if (action.startsWith('finding.')) return '/audits/findings';
   if (action.startsWith('audit.')) return '/audits';
   if (action.startsWith('project.')) return '/projects';
@@ -641,7 +648,7 @@ export function activityPage(
             ${data.audit.map(
               (a) => html`<tr>
                 <td>${when(a.at)}</td><td>${personName(data.users, a.actor)}</td><td><code>${a.action}</code></td>
-                <td>${a.target && /^[0-9a-f-]{36}$/.test(a.target) ? html`<a href="${targetPath(a.action)}/${a.target}"><code>${a.target.slice(0, 8)}</code></a>` : html`<code>${a.target ?? ''}</code>`}</td>
+                <td>${a.target && /^[0-9a-f-]{36}$/.test(a.target) && targetPath(a.action) ? html`<a href="${targetPath(a.action)}/${a.target}"><code>${a.target.slice(0, 8)}</code></a>` : html`<code>${a.target?.slice(0, 40) ?? ''}</code>`}</td>
                 <td class="json">${compact(a.before)}</td><td class="json">${compact(a.after)}</td>
               </tr>`,
             )}

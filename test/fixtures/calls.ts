@@ -9,6 +9,8 @@ import type {
 } from '../../src/calls/sources/source.js';
 import { SourceApiError } from '../../src/calls/sources/source.js';
 import type { Attendee, NormalizedTranscript, Vendor } from '../../src/calls/types.js';
+import type { Pool } from '../../src/db/pool.js';
+import { addLink, createProject } from '../../src/registry/registry.js';
 import type { SecretBox } from '../../src/security/sealed.js';
 import { generateTokenKeyPair, loadPrivateKey, loadPublicKey, seal, secretBox } from '../../src/security/sealed.js';
 
@@ -163,3 +165,58 @@ export function testSecrets(): { box: SecretBox; seal: (plaintext: string) => st
   }
   return keys;
 }
+
+// A made-up registry and made-up model answers for the Acme call above --------------------
+
+export const PORTAL_REPO = 'acme-co/portal';
+export const SITE_REPO = 'globex-co/site';
+
+/** Two clients with one project each. Returns the project ids. */
+export async function seedRegistry(pool: Pool, actor: string): Promise<{ acme: string; globex: string }> {
+  const acme = await createProject(
+    pool,
+    { name: 'Acme Portal', client: 'Acme', description: 'Customer portal with reports and a daily digest.', domains: ['acme.example'], aliases: ['the portal'] },
+    actor,
+  );
+  await addLink(pool, acme, 'repo', PORTAL_REPO, actor);
+  const globex = await createProject(pool, { name: 'Globex Site', client: 'Globex', description: 'Marketing site and booking form.', domains: ['globex.example'] }, actor);
+  await addLink(pool, globex, 'repo', SITE_REPO, actor);
+  return { acme, globex };
+}
+
+export const QUOTES = {
+  csv: 'can we get a CSV export on the reports page?',
+  zone: 'the daily digest email shows the wrong time zone for our Denver office',
+  staging: 'I will also send Dana the staging link after this call.',
+  billing: 'We still have to decide who owns the billing export on our side.',
+};
+
+/** What the matching step is told the model said. */
+export const matchAnswer = (project = 'P1', confidence = 0.93, quote = QUOTES.csv) => ({
+  summary: 'Weekly sync on the portal. The client asked for a CSV export and reported a time zone bug in the digest; a staging link will be sent.',
+  matches: [{ project, confidence, quote }],
+});
+
+const item = (type: string, title: string, detail: string, quote: string, draft = '', repo = '') => ({ type, title, detail, quote, repo, draft });
+
+/** In the order a model might give them: the note is not last. */
+export const suggestionsAnswer = () => ({
+  suggestions: [
+    item('code_change', 'Add CSV export to the reports page', 'An export button next to the date filter that downloads the current report as CSV.', QUOTES.csv),
+    item('note', 'Client has not decided who owns the billing export', 'No action for us until they decide.', QUOTES.billing),
+    item('code_change', 'Fix the time zone in the daily digest email', 'The digest shows times in the wrong zone for the Denver office.', QUOTES.zone),
+    item(
+      'client_followup',
+      'Send Dana the staging link',
+      'Morgan promised the staging link after the call.',
+      QUOTES.staging,
+      'Hi Dana, here is the staging link we talked about on the call today. Tell me if anything looks off.',
+    ),
+  ],
+});
+
+export const briefAnswer = () => ({
+  summary: 'Add a CSV download of the current report to the reports page.',
+  steps: ['Find the reports page and the query behind it.', 'Add an export button next to the date filter that downloads the rows as CSV.', 'Cover the export with a test.'],
+  done_when: ['The reports page offers a CSV download of what is shown.', 'The tests pass.'],
+});

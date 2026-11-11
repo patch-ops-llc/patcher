@@ -495,7 +495,7 @@ export function projectsPage(
   );
 }
 
-export function projectPage(ctx: PageContext, data: { project: Project; railwayNames: Map<string, string> }): string {
+export function projectPage(ctx: PageContext, data: { project: Project; railwayNames: Map<string, string>; tasksCard: SafeHtml }): string {
   const { project: p } = data;
   const owner = hasRole(ctx.session.user, 'owner');
   const disabled = owner ? '' : 'disabled';
@@ -592,6 +592,8 @@ export function projectPage(ctx: PageContext, data: { project: Project; railwayN
             </form>`
           : ''}
       </section>
+
+      ${data.tasksCard}
 
       ${owner
         ? html`<section class="card">

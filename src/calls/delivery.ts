@@ -59,11 +59,10 @@ export interface CallView {
 export async function loadCallView(db: Queryable, callId: string): Promise<CallView | null> {
   const call = await getCall(db, callId);
   if (!call) return null;
-  const [matches, suggestions, recommendations] = await Promise.all([
-    listMatches(db, callId),
-    listSuggestions(db, callId, call.version),
-    carriedRecommendations(db, callId),
-  ]);
+  // One after the other: `db` may be a single connection inside a transaction.
+  const matches = await listMatches(db, callId);
+  const suggestions = await listSuggestions(db, callId, call.version);
+  const recommendations = await carriedRecommendations(db, callId);
   const agents = await listAgentRuns(
     db,
     recommendations.map((r) => r.id),

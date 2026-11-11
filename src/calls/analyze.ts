@@ -375,7 +375,8 @@ async function draftSuggestions(deps: WorkerDeps, call: Call): Promise<Drafted[]
       out.push({ project, suggestion, brief });
     }
   }
-  return out;
+  // Notes go last, so what can be approved is numbered from 1 without gaps.
+  return out.sort((a, b) => Number(a.suggestion.type === 'note') - Number(b.suggestion.type === 'note'));
 }
 
 /** The brief for one code change: drafted by the model when it may be asked, written by rule otherwise. Never blocks the suggestion. */

@@ -143,10 +143,19 @@ export async function closeCallRecommendations(
   callId: string,
   options: { reason: string; actor: Actor; blankEvidence?: boolean },
 ): Promise<number> {
+  // With `blankEvidence` the call's words go from everything that was not acted on: the quote,
+  // the body, and the text approving would have used (the agent's brief, the draft, the detail).
+  const blank = options.blankEvidence
+    ? `, evidence = '[{"quote": "[removed]", "source": "The recording was deleted at its source"}]'::jsonb,
+         body = '',
+         proposed_action = jsonb_set(proposed_action, '{params}', COALESCE(proposed_action->'params', '{}'::jsonb)
+           || CASE WHEN jsonb_exists(proposed_action->'params', 'prompt') THEN jsonb_build_object('prompt', $3::text) ELSE '{}'::jsonb END
+           || CASE WHEN jsonb_exists(proposed_action->'params', 'draft') THEN jsonb_build_object('draft', $3::text) ELSE '{}'::jsonb END
+           || CASE WHEN jsonb_exists(proposed_action->'params', 'detail') THEN jsonb_build_object('detail', '') ELSE '{}'::jsonb END)`
+    : '';
   const { rows } = await tx.query<{ id: string }>(
     `UPDATE recommendations
-        SET status = 'expired', last_error = $3, updated_at = now()
-            ${options.blankEvidence ? `, evidence = '[{"quote": "[removed]", "source": "The recording was deleted at its source"}]'::jsonb` : ''}
+        SET status = 'expired', last_error = $3, updated_at = now()${blank}
       WHERE carrier_type = $1 AND carrier_id = $2 AND status IN ('drafted', 'posted')
       RETURNING id`,
     [CALL_CARRIER, callId, options.reason],

@@ -106,7 +106,7 @@ export const settingDefs = {
   'ai.calls.enabled': {
     schema: z.boolean(),
     default: true,
-    label: 'Use the model for calls (off: a call is matched by registry facts alone and gets no suggestions)',
+    label: 'Use the model for calls (off: calls are still collected, and wait unanalysed until this is on again)',
   },
   'ai.calls.model_match': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that matches a call to a project' },
   'ai.calls.model_suggest': { schema: modelId, default: TIER_MODELS.mid, label: 'Model that suggests changes from a call' },

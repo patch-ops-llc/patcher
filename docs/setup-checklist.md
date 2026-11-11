@@ -30,8 +30,8 @@ apply` and went through; later pushes to the branch wait in **web → Deployment
 deployment that is already running keeps serving in the meantime.
 
 What is left is for the owner: section 3 (the Slack app and its six variables), section 4
-(first run), section 5 (the weekly audit and its variables), and the last item of section 6
-after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
+(first run), section 5 (the weekly audit and its variables), section 6 (call transcripts),
+and the last item of section 7 after the pull request is merged. Sections 1 and 2 are kept as the record of how the project
 is built, should it ever be rebuilt.
 
 ## 1. Railway project
@@ -97,9 +97,11 @@ hold `TOKEN_PRIVATE_KEY`.
 `web` works out its own address from `RAILWAY_PUBLIC_DOMAIN`, which Railway sets. Set
 `APP_BASE_URL` on `web` as well only when it is served from a custom domain.
 
-The token key pair is not used by anything in the foundation. It is for the tokens later
-phases store (design section 12.3): the public service can encrypt with the public key and
-cannot decrypt. To make a new pair, run this where the output is not logged and paste each
+The token key pair protects the Calendly and Fathom keys typed into **Settings → Calls**
+(section 6) and the tokens later phases store (design section 12.3): the public service can
+encrypt with the public key and cannot decrypt. Without the pair a call source cannot be
+connected. Replacing the pair makes the stored keys unreadable; each source then has to be
+removed and connected again. To make a new pair, run this where the output is not logged and paste each
 line into its variable:
 
 ```bash
@@ -128,12 +130,12 @@ All on **worker only**. `web` must never hold any of them.
 | Variable | Needed for | Where the value comes from |
 | --- | --- | --- |
 | `RAILWAY_API_TOKEN` | The audit itself, the inventory and the probes | Railway → **Account Settings → Tokens** (<https://railway.com/account/tokens>) → choose the PatchOps workspace in the dropdown → **Create** |
-| `CURSOR_API_KEY` | "Fix via agent" | Cursor Dashboard → **API Keys**, or a service account API key |
+| `CURSOR_API_KEY` | "Fix via agent", and approved code changes from calls | Cursor Dashboard → **API Keys**, or a service account API key |
 | `CURSOR_AGENT_MODEL` | Optional: the model the agent uses | A model ID from Cursor's `GET /v1/models`. Unset: the account's default |
 | `GITHUB_APP_ID` | "Production behind the default branch" and "critical dependency alerts" | The GitHub App's settings page → **About** → App ID |
 | `GITHUB_APP_PRIVATE_KEY` | Same | The GitHub App's settings page → **Private keys** → **Generate a private key**; paste the whole `.pem` file's contents |
 | `GITHUB_APP_INSTALLATION_ID` | Same | After installing the app: the number at the end of the installation's address, `https://github.com/organizations/<org>/settings/installations/<number>` |
-| `ANTHROPIC_API_KEY` | The model that assesses findings, ranks the report and drafts fix briefs | Claude Console (<https://platform.claude.com>) → **API keys** → **Create key** |
+| `ANTHROPIC_API_KEY` | The model that assesses findings, ranks the report and drafts fix briefs; and the one that matches calls and drafts their suggestions | Claude Console (<https://platform.claude.com>) → **API keys** → **Create key** |
 
 Each of the four is independent. Without Railway nothing is audited; without Cursor the
 report has no "Fix via agent" buttons; without GitHub two checks are listed as not run;
@@ -147,9 +149,12 @@ without Anthropic the rules rank and word the report, and its second line says
 | `DRY_RUN` | worker | `1` logs approved actions instead of executing them, whatever the UI switch says |
 | `LOG_LEVEL` | web, worker | `debug`, `info` (default), `warn`, `error` |
 
-`SLACK_API_URL`, `SLACK_OIDC_URL`, `RAILWAY_API_URL`, `CURSOR_API_URL`, `GITHUB_API_URL` and
-`ANTHROPIC_API_URL` are for local development only and are refused when
-`NODE_ENV=production`.
+`SLACK_API_URL`, `SLACK_OIDC_URL`, `RAILWAY_API_URL`, `CURSOR_API_URL`, `GITHUB_API_URL`,
+`ANTHROPIC_API_URL`, `CALENDLY_API_URL` and `FATHOM_API_URL` are for local development only
+and are refused when `NODE_ENV=production`.
+
+Calendly and Fathom have no variables. Their keys are typed into **Settings → Calls**
+(section 6) and stored encrypted in the database.
 
 ## 3. Owner: the Slack app
 
@@ -257,7 +262,104 @@ Things to know:
 - Project-specific checks (a URL, an expected status and optionally expected JSON) are added
   on a project's page and probed with the rest.
 
-## 6. Later, not needed for the foundation
+## 6. Owner: call transcripts
+
+No new Railway variable is needed. Calls use what sections 2 and 5 already set: the token
+key pair, `APP_BASE_URL` on the worker, `ANTHROPIC_API_KEY`, and for code changes
+`CURSOR_API_KEY` and the GitHub App. The Calendly token and the Fathom keys are typed into
+Patcher itself, never into a variable, a chat or a commit.
+
+Before you start, check:
+
+- `TOKEN_PUBLIC_KEY` is set on `web` and `TOKEN_PRIVATE_KEY` on `worker` (both were
+  generated at setup). `/health` shows `features.tokenEncryption: true`; if the pair is
+  missing, **Settings → Calls** says so instead of offering the connect form.
+- `APP_BASE_URL` on `worker` is the public `https` address of `web`. It is where the
+  webhooks are registered. If it is not a public `https` address, the sources still work,
+  by poll only, up to 15 minutes late.
+- `ANTHROPIC_API_KEY` is set on `worker`. Without it calls are collected and wait
+  unanalysed; they are picked up by themselves once the key is there.
+
+Then:
+
+1. **Channel.** Create or choose the calls channel (the design suggests `#ops-calls`),
+   invite the bot (`/invite @Patcher`), and choose it for **Calls** in **Settings → Slack
+   routing**. Choose a channel for **Bot errors** too if there is none yet: a key that stops
+   working is reported there. Without a calls channel the suggestions wait, and the call's
+   page says so.
+2. **Your own domains.** In **Settings → Calls**, fill in "Your own email domains" (for
+   example the PatchOps domain). Attendees from these never count as a client.
+3. **Registry.** On each project in **Projects**, fill in what matching reads: the client,
+   the client's e-mail domains, the names the project goes by (aliases), a one-line
+   description, contacts, and the linked repositories. A call is matched only to an active
+   project, and a code change is offered only on a repository linked to the matched
+   project. Correcting a match on a call's page offers to save the attendee's domain or a
+   name on the project.
+4. **Calendly.** In Calendly: **Integrations & apps → API and webhooks**
+   (<https://calendly.com/integrations/api_webhooks>) → generate a personal access token
+   with the scopes `meeting_recaps:read`, `users:read` and
+   `webhooks:write`. The Calendly plan must include Notetaker. In Patcher: **Settings →
+   Calls → Sources**, choose "Calendly (personal access token)", type whose it is, paste
+   the token, **Connect**. There is one Calendly connection.
+5. **Fathom.** In Fathom: your user **Settings → API Access → Generate API Key**. A Fathom key is one
+   person's and sees what that person can see. Choose one or both:
+   - *One key for the team.* A Fathom admin who can view all calls shared with the team
+     makes the key; connect it as "Fathom, one key for the team". It covers every call a
+     teammate shares with the team and none they keep private. Receiving teammates' calls
+     by webhook needs the Fathom Team plan; on another plan Patcher registers a webhook for
+     the key owner's own recordings, says so under **Webhook**, and finds the rest by poll.
+   - *A key per teammate.* Each teammate makes their own key; an owner connects each as
+     "Fathom, a teammate's own key". This also covers that person's private calls.
+6. **Webhooks need no step of yours.** When a key is connected the worker checks it and
+   registers the webhook at the vendor, with a signing secret, at
+   `https://<web address>/webhooks/<source>/<a random token per connection>`. Nothing has
+   to be created in Calendly's or Fathom's settings. Reload **Settings → Calls** after a
+   few seconds: the source shows **Connected**, and **Registered** or **Poll only** with
+   the reason. "Earlier calls, days" at connect time (up to 14) also collects calls from
+   before the connection.
+7. **GitHub App permission.** The suggestions read each linked repository's README and the
+   titles of its open pull requests. Add **Pull requests: Read-only** to the GitHub App
+   from section 5 (the app's settings → **Permissions & events**), then accept the new
+   permission on the installation. Without it suggestions are still drafted, without the
+   pull request titles.
+8. **Check.** `https://<web address>/health` lists `callSources` with how many connections
+   each source has and when it last answered. Hold a short test call, or use **Calls → Add
+   a transcript** with a few made-up lines. The call appears under **Calls** at once and is
+   analysed after the settle time (ten minutes to start with; **Settings → Calls** changes
+   it). A matched call that asked for something appears in the calls channel as one
+   message with **Approve all**, **Pick**, **Wrong project** and **Details**.
+
+What is sent where, once this is on:
+
+- **To Anthropic**, per call: the transcript after redaction, up to a token cap; attendee
+  names and e-mail domains, not addresses; the registry's project cards (name, client,
+  aliases, description, repository names); for a matched project, the start of each linked
+  repository's README, its open pull request titles and the titles of earlier suggestions
+  for that project. Never a key.
+- **To Cursor**, only after an approval: the brief shown on the approval page, which
+  includes the words quoted from the call.
+- **To Slack**: suggestion titles and, under **Details**, the quoted words. Never the
+  transcript, and no e-mail address.
+
+Things to know:
+
+- **Settings → Calls** has the switch for calls, the switch for the model, the confidence
+  thresholds (0.80 to match without asking, 0.50 to ask), the most suggestions per call,
+  the retention time for transcript text (180 days to start with), and a daily and monthly
+  budget for the model (both start unset).
+- A call the model is unsure about is asked in the calls channel with the closest projects
+  as buttons. A call it cannot place is under **Calls → Unmatched** and is not posted.
+- When a recording is deleted in Calendly or Fathom, Patcher deletes its copy. Fathom sends
+  no notice of a deletion, so a recording deleted there stays in Patcher until its
+  retention time; Calendly's deletion webhook is acted on at once.
+- Removing a source deletes its webhook at the vendor and erases its key. Calls already
+  collected stay.
+- Pause and **Dry run** apply here as everywhere. While paused the poll does not run, the
+  model is not asked and nothing is posted or run; a webhook that arrives is still stored,
+  and its call waits until Patcher is resumed. In a dry run an approved change is logged
+  and no agent is started.
+
+## 7. Later, not needed for the foundation
 
 - An external uptime monitor on `https://<web address>/health` (design section 13.1).
 - Railway: restrict who can view the project's variables; turn on two-factor
